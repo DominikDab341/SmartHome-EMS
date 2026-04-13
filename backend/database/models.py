@@ -29,9 +29,9 @@ class User(Base):
         default=UserRole.RESIDENT,
     )
 
+    # add house_id when house model is ready
     house_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("houses.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
