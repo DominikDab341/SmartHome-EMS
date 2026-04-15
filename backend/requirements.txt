@@ -4,3 +4,4 @@ asyncpg
 alembic
 python-dotenv
 pydantic-settings
+passlib[bcrypt]
