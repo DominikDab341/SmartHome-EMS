@@ -4,4 +4,11 @@ asyncpg
 alembic
 python-dotenv
 pydantic-settings
-passlib[bcrypt]
+bcrypt
+PyJWT[crypto]
+python-multipart
+
+# testing
+pytest
+pytest-asyncio
+httpx
