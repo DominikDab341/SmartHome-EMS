@@ -1,5 +1,5 @@
 """
-Authentication router – POST /api/auth/login
+Authentication router – POST /api/auth/login, POST /api/auth/register
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -7,10 +7,10 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.schemas import TokenResponse
+from api.schemas import RegisterRequest, TokenResponse, UserPublic
 from api.security import create_access_token, hash_password, verify_password
 from database.database import get_db
-from database.models import User
+from database.models import User, UserRole
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -56,3 +56,46 @@ async def login(
 
     access_token = create_access_token(data={"sub": user.username})
     return TokenResponse(access_token=access_token)
+
+
+@router.post(
+    "/register",
+    response_model=UserPublic,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a new user account",
+)
+async def register(
+    body: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> UserPublic:
+    """
+    Create a new user account with the **RESIDENT** role.
+
+    - Returns the created user profile on success.
+    - Returns **HTTP 409** if the username or email is already taken.
+    """
+    result = await db.execute(select(User).where(User.username == body.username))
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Username already taken",
+        )
+
+    result = await db.execute(select(User).where(User.email == body.email))
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email already registered",
+        )
+
+    user = User(
+        username=body.username,
+        email=body.email,
+        hashed_password=hash_password(body.password),
+        role=UserRole.RESIDENT,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    return UserPublic.model_validate(user)
