@@ -26,7 +26,13 @@ router = APIRouter(prefix="/api/ems", tags=["ems"])
 
 
 @router.post("/seed", status_code=status.HTTP_204_NO_CONTENT)
-async def seed_demo_data(db: AsyncSession = Depends(get_db)) -> None:
+async def seed_demo_data(
+    reset: bool = False,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    if reset:
+        await energy_manager.reset_seed_data(db)
+        return
     await energy_manager.ensure_seed_data(db)
 
 

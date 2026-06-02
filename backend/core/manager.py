@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import (
@@ -54,6 +54,15 @@ class EnergyManager:
     def set_strategy(self, strategy_type: StrategyType) -> None:
         self.strategy = strategy_for(strategy_type)
 
+    async def reset_seed_data(self, db: AsyncSession) -> None:
+        """Clear simulation tables and recreate demo data from current code."""
+        await db.execute(delete(EnergyLog))
+        await db.execute(delete(Device))
+        await db.execute(delete(Battery))
+        await db.execute(delete(SystemSettings))
+        await db.commit()
+        await self.ensure_seed_data(db)
+
     async def ensure_seed_data(self, db: AsyncSession) -> None:
         if await db.scalar(select(Battery.id).limit(1)) is None:
             db.add(
@@ -72,9 +81,9 @@ class EnergyManager:
                     active_strategy=StrategyType.ECO_FRIENDLY,
                     grid_buy_price=0.95,
                     grid_sell_price=0.42,
-                    location_name="Warsaw",
-                    latitude=52.2297,
-                    longitude=21.0122,
+                    location_name="Wroclaw",
+                    latitude=51.1078,
+                    longitude=17.0385,
                 )
             )
 

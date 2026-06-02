@@ -18,6 +18,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://smarthome:password@db:5432/smarthome_db
       - SECRET_KEY=dev-compose-secret
       - SIMULATION_INTERVAL_SECONDS=60
+      - WATCHFILES_FORCE_POLLING=true
     depends_on:
       - db
     volumes:

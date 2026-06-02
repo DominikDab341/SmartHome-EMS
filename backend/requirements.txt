@@ -10,3 +10,4 @@ bcrypt
 PyJWT
 python-multipart
 email-validator
+watchfiles
