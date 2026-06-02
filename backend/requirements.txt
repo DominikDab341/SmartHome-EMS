@@ -6,3 +6,7 @@ alembic
 pydantic
 pydantic-settings
 httpx
+bcrypt
+PyJWT
+python-multipart
+email-validator

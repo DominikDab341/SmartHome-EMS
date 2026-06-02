@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15
@@ -18,6 +16,8 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://smarthome:password@db:5432/smarthome_db
+      - SECRET_KEY=dev-compose-secret
+      - SIMULATION_INTERVAL_SECONDS=60
     depends_on:
       - db
     volumes:
