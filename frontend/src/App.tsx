@@ -86,6 +86,7 @@ type UserProfile = {
   username: string
   email: string
   role: 'ADMIN' | 'OWNER' | 'RESIDENT'
+  house_id: number | null
 }
 
 type AuthForm = {
@@ -100,6 +101,12 @@ type DeviceForm = {
   maxPowerKw: string
   currentPowerKw: string
   isActive: boolean
+}
+
+type ResidentForm = {
+  username: string
+  email: string
+  password: string
 }
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -117,6 +124,12 @@ const emptyDeviceForm: DeviceForm = {
   maxPowerKw: '1.0',
   currentPowerKw: '0.5',
   isActive: true,
+}
+
+const emptyResidentForm: ResidentForm = {
+  username: '',
+  email: '',
+  password: '',
 }
 
 class ApiError extends Error {
@@ -277,6 +290,29 @@ function deviceErrorMessage(error: unknown): string {
   return 'Nie udalo sie zapisac zmian urzadzenia.'
 }
 
+function residentErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 403) {
+      return 'Tylko wlasciciel domu moze tworzyc konta resident.'
+    }
+    if (error.status === 409) {
+      return error.message.toLowerCase().includes('email')
+        ? 'Ten adres email jest juz zarejestrowany.'
+        : 'Ta nazwa uzytkownika jest juz zajeta.'
+    }
+    if (error.status === 422) {
+      return 'Sprawdz email, nazwe uzytkownika i haslo minimum 8 znakow.'
+    }
+    return error.message
+  }
+
+  return 'Nie udalo sie utworzyc residenta.'
+}
+
+function canManageHouse(profile: UserProfile | null): boolean {
+  return profile?.role === 'OWNER' || profile?.role === 'ADMIN'
+}
+
 function App() {
   const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY)
   const [token, setToken] = useState<string | null>(storedToken)
@@ -299,6 +335,13 @@ function App() {
   const [pendingDeleteDeviceId, setPendingDeleteDeviceId] = useState<number | null>(null)
   const [deviceBusy, setDeviceBusy] = useState(false)
   const [deviceError, setDeviceError] = useState<string | null>(null)
+  const [residents, setResidents] = useState<UserProfile[]>([])
+  const [residentForm, setResidentForm] = useState<ResidentForm>(emptyResidentForm)
+  const [pendingDeleteResidentId, setPendingDeleteResidentId] = useState<number | null>(null)
+  const [residentBusy, setResidentBusy] = useState(false)
+  const [residentError, setResidentError] = useState<string | null>(null)
+
+  const canManage = canManageHouse(user)
 
   const clearSession = useCallback(() => {
     localStorage.removeItem(TOKEN_STORAGE_KEY)
@@ -311,6 +354,10 @@ function App() {
     setEditingDeviceId(null)
     setPendingDeleteDeviceId(null)
     setDeviceError(null)
+    setResidents([])
+    setResidentForm(emptyResidentForm)
+    setPendingDeleteResidentId(null)
+    setResidentError(null)
     setStatus('Offline')
   }, [])
 
@@ -333,6 +380,26 @@ function App() {
       }
     },
     [clearSession, token],
+  )
+
+  const loadResidents = useCallback(
+    async (authToken = token): Promise<void> => {
+      if (!authToken || !canManage) {
+        setResidents([])
+        return
+      }
+
+      try {
+        const data = await request<UserProfile[]>('/api/users/residents', undefined, authToken)
+        setResidents(data)
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          clearSession()
+          setAuthError('Sesja wygasla. Zaloguj sie ponownie.')
+        }
+      }
+    },
+    [canManage, clearSession, token],
   )
 
   const activeConsumption = useMemo(() => {
@@ -396,6 +463,21 @@ function App() {
         if (!cancelled) {
           setUser(profile)
           setStatus('Online')
+          if (canManageHouse(profile)) {
+            void request<UserProfile[]>('/api/users/residents', undefined, token)
+              .then((data) => {
+                if (!cancelled) {
+                  setResidents(data)
+                }
+              })
+              .catch(() => {
+                if (!cancelled) {
+                  setResidents([])
+                }
+              })
+          } else {
+            setResidents([])
+          }
         }
       })
       .catch(() => {
@@ -482,6 +564,16 @@ function App() {
       setUser(profile)
       setCheckingSession(false)
       setAuthForm({ username: '', email: '', password: '' })
+      if (canManageHouse(profile)) {
+        const ownerResidents = await request<UserProfile[]>(
+          '/api/users/residents',
+          undefined,
+          tokenResponse.access_token,
+        )
+        setResidents(ownerResidents)
+      } else {
+        setResidents([])
+      }
       await loadDashboard(tokenResponse.access_token)
     } catch (error) {
       setAuthError(authErrorMessage(error))
@@ -493,6 +585,77 @@ function App() {
   function logout(): void {
     clearSession()
     setAuthError(null)
+  }
+
+  function updateResidentField(field: keyof ResidentForm, value: string): void {
+    setResidentForm((current) => ({ ...current, [field]: value }))
+    setResidentError(null)
+    setPendingDeleteResidentId(null)
+  }
+
+  async function handleResidentSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (!token || !canManage) return
+
+    const username = residentForm.username.trim()
+    const email = residentForm.email.trim()
+    const password = residentForm.password
+
+    if (!username || !email || !password) {
+      setResidentError('Uzupelnij wszystkie pola residenta.')
+      return
+    }
+
+    setResidentBusy(true)
+    setResidentError(null)
+    try {
+      await request<UserProfile>(
+        '/api/users/residents',
+        {
+          method: 'POST',
+          body: JSON.stringify({ username, email, password }),
+        },
+        token,
+      )
+      setResidentForm(emptyResidentForm)
+      setPendingDeleteResidentId(null)
+      await loadResidents(token)
+    } catch (error) {
+      setResidentError(residentErrorMessage(error))
+    } finally {
+      setResidentBusy(false)
+    }
+  }
+
+  function requestDeleteResident(resident: UserProfile): void {
+    setPendingDeleteResidentId(resident.id)
+    setResidentError(null)
+  }
+
+  async function confirmDeleteResident(resident: UserProfile): Promise<void> {
+    if (!token || !canManage) return
+
+    setResidentBusy(true)
+    setResidentError(null)
+    try {
+      await request<void>(
+        `/api/users/residents/${resident.id}`,
+        {
+          method: 'DELETE',
+        },
+        token,
+      )
+      setPendingDeleteResidentId(null)
+      await loadResidents(token)
+    } catch (error) {
+      setResidentError(
+        error instanceof ApiError && error.status === 404
+          ? 'Ten resident nie istnieje albo nie nalezy do tego domu.'
+          : residentErrorMessage(error),
+      )
+    } finally {
+      setResidentBusy(false)
+    }
   }
 
   function updateDeviceFormField<K extends keyof DeviceForm>(
@@ -528,7 +691,7 @@ function App() {
 
   async function handleDeviceSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    if (!token || !devicePanelReady) return
+    if (!token || !devicePanelReady || !canManage) return
 
     const validationError = validateDeviceForm(deviceForm)
     if (validationError) {
@@ -575,7 +738,7 @@ function App() {
   }
 
   async function confirmDeleteDevice(device: Device): Promise<void> {
-    if (!token) return
+    if (!token || !canManage) return
 
     setDeviceBusy(true)
     setDeviceError(null)
@@ -603,7 +766,7 @@ function App() {
   }
 
   async function runTick(): Promise<void> {
-    if (!token) return
+    if (!token || !canManage) return
 
     setBusy(true)
     try {
@@ -620,7 +783,7 @@ function App() {
   }
 
   async function setStrategy(strategy: StrategyType): Promise<void> {
-    if (!token) return
+    if (!token || !canManage) return
 
     setBusy(true)
     try {
@@ -639,7 +802,7 @@ function App() {
   }
 
   async function toggleDevice(device: Device): Promise<void> {
-    if (!token) return
+    if (!token || !canManage) return
 
     setBusy(true)
     try {
@@ -655,7 +818,7 @@ function App() {
   }
 
   async function updateDevicePower(device: Device, value: number): Promise<void> {
-    if (!token) return
+    if (!token || !canManage) return
 
     setDashboard((current) => {
       if (!current) return current
@@ -680,7 +843,11 @@ function App() {
   function renderDeviceCard(device: Device) {
     return (
       <article
-        className={device.id === editingDeviceId ? 'device-card editing' : 'device-card'}
+        className={[
+          'device-card',
+          device.id === editingDeviceId ? 'editing' : '',
+          canManage ? '' : 'read-only',
+        ].filter(Boolean).join(' ')}
         key={device.id}
       >
         <div>
@@ -704,6 +871,7 @@ function App() {
             max={device.max_power_kw}
             step="0.1"
             value={device.current_power_kw}
+            disabled={!canManage || busy || deviceBusy}
             onChange={(event) =>
               void updateDevicePower(device, Number(event.currentTarget.value))
             }
@@ -717,51 +885,53 @@ function App() {
           type="button"
           className={device.is_active ? 'switch active' : 'switch'}
           onClick={() => void toggleDevice(device)}
-          disabled={busy || deviceBusy}
+          disabled={!canManage || busy || deviceBusy}
         >
           {device.is_active ? 'On' : 'Off'}
         </button>
-        <div className="device-actions">
-          {pendingDeleteDeviceId === device.id ? (
-            <>
-              <button
-                type="button"
-                className="danger-button compact-button"
-                onClick={() => void confirmDeleteDevice(device)}
-                disabled={deviceBusy}
-              >
-                Confirm
-              </button>
-              <button
-                type="button"
-                className="ghost-button compact-button"
-                onClick={() => setPendingDeleteDeviceId(null)}
-                disabled={deviceBusy}
-              >
-                Cancel
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="ghost-button compact-button"
-                onClick={() => editDevice(device)}
-                disabled={deviceBusy}
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                className="danger-button compact-button"
-                onClick={() => requestDeleteDevice(device)}
-                disabled={deviceBusy}
-              >
-                Delete
-              </button>
-            </>
-          )}
-        </div>
+        {canManage && (
+          <div className="device-actions">
+            {pendingDeleteDeviceId === device.id ? (
+              <>
+                <button
+                  type="button"
+                  className="danger-button compact-button"
+                  onClick={() => void confirmDeleteDevice(device)}
+                  disabled={deviceBusy}
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  className="ghost-button compact-button"
+                  onClick={() => setPendingDeleteDeviceId(null)}
+                  disabled={deviceBusy}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="ghost-button compact-button"
+                  onClick={() => editDevice(device)}
+                  disabled={deviceBusy}
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="danger-button compact-button"
+                  onClick={() => requestDeleteDevice(device)}
+                  disabled={deviceBusy}
+                >
+                  Delete
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </article>
     )
   }
@@ -893,9 +1063,13 @@ function App() {
               <p className="eyebrow">Storage</p>
               <h2>{dashboard ? `${dashboard.battery.state_of_charge_percentage.toFixed(0)}%` : '--'}</h2>
             </div>
-            <button type="button" onClick={runTick} disabled={busy}>
-              {busy ? 'Running' : 'Tick'}
-            </button>
+            {canManage ? (
+              <button type="button" onClick={runTick} disabled={busy}>
+                {busy ? 'Running' : 'Tick'}
+              </button>
+            ) : (
+              <span className="readonly-badge">Read only</span>
+            )}
           </div>
           <div className="battery-gauge" aria-label="Battery charge">
             <div
@@ -959,7 +1133,7 @@ function App() {
                     type="button"
                     className={dashboard?.settings.active_strategy === strategy ? 'active' : ''}
                     onClick={() => void setStrategy(strategy)}
-                    disabled={busy}
+                    disabled={busy || !canManage}
                   >
                     {strategyLabels[strategy]}
                   </button>
@@ -971,6 +1145,107 @@ function App() {
               <span>Sell {dashboard ? formatMoney(dashboard.settings.grid_sell_price) : '--'}</span>
             </div>
           </section>
+
+          {canManage ? (
+            <section className="section-band resident-section">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Residents</p>
+                  <h2>{residents.length} observers</h2>
+                </div>
+              </div>
+
+              <form className="resident-form" onSubmit={(event) => void handleResidentSubmit(event)}>
+                <label>
+                  Username
+                  <input
+                    type="text"
+                    value={residentForm.username}
+                    minLength={3}
+                    maxLength={64}
+                    required
+                    onChange={(event) => updateResidentField('username', event.currentTarget.value)}
+                  />
+                </label>
+                <label>
+                  Email
+                  <input
+                    type="email"
+                    value={residentForm.email}
+                    required
+                    onChange={(event) => updateResidentField('email', event.currentTarget.value)}
+                  />
+                </label>
+                <label>
+                  Password
+                  <input
+                    type="password"
+                    value={residentForm.password}
+                    minLength={8}
+                    required
+                    onChange={(event) => updateResidentField('password', event.currentTarget.value)}
+                  />
+                </label>
+                {residentError && <p className="device-error">{residentError}</p>}
+                <button type="submit" disabled={residentBusy}>
+                  {residentBusy ? 'Creating' : 'Create resident'}
+                </button>
+              </form>
+
+              <div className="resident-list">
+                {residents.length ? (
+                  residents.map((resident) => (
+                    <div className="resident-row" key={resident.id}>
+                      <div className="resident-main">
+                        <strong>{resident.username}</strong>
+                        <span>{resident.email}</span>
+                      </div>
+                      <div className="resident-actions">
+                        <small>{resident.role.toLowerCase()}</small>
+                        {pendingDeleteResidentId === resident.id ? (
+                          <>
+                            <button
+                              type="button"
+                              className="danger-button compact-button"
+                              onClick={() => void confirmDeleteResident(resident)}
+                              disabled={residentBusy}
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost-button compact-button"
+                              onClick={() => setPendingDeleteResidentId(null)}
+                              disabled={residentBusy}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className="danger-button compact-button"
+                            onClick={() => requestDeleteResident(resident)}
+                            disabled={residentBusy}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <p className="muted">No residents yet.</p>
+                )}
+              </div>
+            </section>
+          ) : (
+            <section className="section-band readonly-panel">
+              <p className="eyebrow">Access</p>
+              <h2>Resident view</h2>
+              <p>Masz podglad domu, ale sterowanie i edycja sa dostepne tylko dla ownera.</p>
+            </section>
+          )}
 
           <section className="section-band devices-section">
             <div className="section-heading">
@@ -985,132 +1260,140 @@ function App() {
               </div>
             </div>
 
-            <form className="device-form" onSubmit={(event) => void handleDeviceSubmit(event)}>
-              <div className="device-form-heading">
-                <div>
-                  <p className="eyebrow">{editingDeviceId ? 'Edit equipment' : 'New equipment'}</p>
-                  <h3>{editingDeviceId ? 'Update device' : 'Add device'}</h3>
-                </div>
-                {editingDeviceId && (
-                  <button
-                    type="button"
-                    className="ghost-button compact-button"
-                    onClick={resetDeviceForm}
-                    disabled={deviceBusy}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
-
-              <div className="device-form-grid">
-                <label className="wide-field">
-                  Name
-                  <input
-                    type="text"
-                    value={deviceForm.name}
-                    minLength={2}
-                    maxLength={96}
-                    placeholder="e.g. Heat pump"
-                    disabled={deviceBusy || !devicePanelReady}
-                    required
-                    onChange={(event) =>
-                      updateDeviceFormField('name', event.currentTarget.value)
-                    }
-                  />
-                </label>
-
-                <div className="form-field">
-                  <span>Type</span>
-                  <div className="type-toggle" role="group" aria-label="Device type">
-                    <button
-                      type="button"
-                      className={deviceForm.type === 'appliance' ? 'active' : ''}
-                      onClick={() => updateDeviceFormField('type', 'appliance')}
-                      disabled={deviceBusy || !devicePanelReady}
-                    >
-                      Load
-                    </button>
-                    <button
-                      type="button"
-                      className={deviceForm.type === 'solar' ? 'active' : ''}
-                      onClick={() => updateDeviceFormField('type', 'solar')}
-                      disabled={deviceBusy || !devicePanelReady}
-                    >
-                      PV
-                    </button>
+            {canManage ? (
+              <form className="device-form" onSubmit={(event) => void handleDeviceSubmit(event)}>
+                <div className="device-form-heading">
+                  <div>
+                    <p className="eyebrow">{editingDeviceId ? 'Edit equipment' : 'New equipment'}</p>
+                    <h3>{editingDeviceId ? 'Update device' : 'Add device'}</h3>
                   </div>
+                  {editingDeviceId && (
+                    <button
+                      type="button"
+                      className="ghost-button compact-button"
+                      onClick={resetDeviceForm}
+                      disabled={deviceBusy}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
 
-                <label>
-                  Max kW
-                  <input
-                    type="number"
-                    min="0.1"
-                    max="25"
-                    step="0.1"
-                    value={deviceForm.maxPowerKw}
-                    disabled={deviceBusy || !devicePanelReady}
-                    required
-                    onChange={(event) =>
-                      updateDeviceFormField('maxPowerKw', event.currentTarget.value)
-                    }
-                  />
-                </label>
+                <div className="device-form-grid">
+                  <label className="wide-field">
+                    Name
+                    <input
+                      type="text"
+                      value={deviceForm.name}
+                      minLength={2}
+                      maxLength={96}
+                      placeholder="e.g. Heat pump"
+                      disabled={deviceBusy || !devicePanelReady}
+                      required
+                      onChange={(event) =>
+                        updateDeviceFormField('name', event.currentTarget.value)
+                      }
+                    />
+                  </label>
 
-                <label>
-                  Current kW
-                  <input
-                    type="number"
-                    min="0"
-                    max={deviceForm.maxPowerKw || 25}
-                    step="0.1"
-                    value={deviceForm.currentPowerKw}
-                    disabled={deviceForm.type === 'solar' || deviceBusy || !devicePanelReady}
-                    required={deviceForm.type === 'appliance'}
-                    onChange={(event) =>
-                      updateDeviceFormField('currentPowerKw', event.currentTarget.value)
-                    }
-                  />
-                </label>
+                  <div className="form-field">
+                    <span>Type</span>
+                    <div className="type-toggle" role="group" aria-label="Device type">
+                      <button
+                        type="button"
+                        className={deviceForm.type === 'appliance' ? 'active' : ''}
+                        onClick={() => updateDeviceFormField('type', 'appliance')}
+                        disabled={deviceBusy || !devicePanelReady}
+                      >
+                        Load
+                      </button>
+                      <button
+                        type="button"
+                        className={deviceForm.type === 'solar' ? 'active' : ''}
+                        onClick={() => updateDeviceFormField('type', 'solar')}
+                        disabled={deviceBusy || !devicePanelReady}
+                      >
+                        PV
+                      </button>
+                    </div>
+                  </div>
 
-                <label className="check-field">
-                  <input
-                    type="checkbox"
-                    checked={deviceForm.isActive}
-                    disabled={deviceBusy || !devicePanelReady}
-                    onChange={(event) =>
-                      updateDeviceFormField('isActive', event.currentTarget.checked)
-                    }
-                  />
-                  <span>Active</span>
-                </label>
-              </div>
+                  <label>
+                    Max kW
+                    <input
+                      type="number"
+                      min="0.1"
+                      max="25"
+                      step="0.1"
+                      value={deviceForm.maxPowerKw}
+                      disabled={deviceBusy || !devicePanelReady}
+                      required
+                      onChange={(event) =>
+                        updateDeviceFormField('maxPowerKw', event.currentTarget.value)
+                      }
+                    />
+                  </label>
 
-              {deviceError && <p className="device-error">{deviceError}</p>}
+                  <label>
+                    Current kW
+                    <input
+                      type="number"
+                      min="0"
+                      max={deviceForm.maxPowerKw || 25}
+                      step="0.1"
+                      value={deviceForm.currentPowerKw}
+                      disabled={deviceForm.type === 'solar' || deviceBusy || !devicePanelReady}
+                      required={deviceForm.type === 'appliance'}
+                      onChange={(event) =>
+                        updateDeviceFormField('currentPowerKw', event.currentTarget.value)
+                      }
+                    />
+                  </label>
 
-              <div className="device-form-actions">
-                <button type="submit" disabled={deviceBusy || !devicePanelReady}>
-                  {deviceBusy
-                    ? 'Saving'
-                    : !devicePanelReady
-                      ? 'Loading'
-                      : editingDeviceId
-                        ? 'Save changes'
-                        : 'Add device'}
-                </button>
-                {!editingDeviceId && (
-                  <button
-                    type="button"
-                    className="ghost-button compact-button"
-                    onClick={resetDeviceForm}
-                    disabled={deviceBusy || !devicePanelReady}
-                  >
-                    Clear
+                  <label className="check-field">
+                    <input
+                      type="checkbox"
+                      checked={deviceForm.isActive}
+                      disabled={deviceBusy || !devicePanelReady}
+                      onChange={(event) =>
+                        updateDeviceFormField('isActive', event.currentTarget.checked)
+                      }
+                    />
+                    <span>Active</span>
+                  </label>
+                </div>
+
+                {deviceError && <p className="device-error">{deviceError}</p>}
+
+                <div className="device-form-actions">
+                  <button type="submit" disabled={deviceBusy || !devicePanelReady}>
+                    {deviceBusy
+                      ? 'Saving'
+                      : !devicePanelReady
+                        ? 'Loading'
+                        : editingDeviceId
+                          ? 'Save changes'
+                          : 'Add device'}
                   </button>
-                )}
+                  {!editingDeviceId && (
+                    <button
+                      type="button"
+                      className="ghost-button compact-button"
+                      onClick={resetDeviceForm}
+                      disabled={deviceBusy || !devicePanelReady}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </form>
+            ) : (
+              <div className="readonly-panel inline-readonly">
+                <p className="eyebrow">Read only</p>
+                <h3>Observation mode</h3>
+                <p>Resident moze obserwowac urzadzenia, ale nie moze ich dodawac, edytowac ani wlaczac.</p>
               </div>
-            </form>
+            )}
 
             <div className="device-groups">
               <section className="device-group" aria-label="Load devices">
