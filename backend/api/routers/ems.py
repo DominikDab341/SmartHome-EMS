@@ -20,7 +20,7 @@ from api.schemas import (
 )
 from core.manager import energy_manager
 from database.database import get_db
-from database.models import Battery, Device, EnergyLog, SystemSettings, User
+from database.models import Battery, Device, DeviceType, EnergyLog, SystemSettings, User
 
 
 router = APIRouter(prefix="/api/ems", tags=["ems"])
@@ -100,7 +100,11 @@ async def create_device(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DevicePublic:
-    device = Device(user_id=current_user.id, **body.model_dump())
+    await energy_manager.ensure_seed_data(db, current_user.id)
+    payload = body.model_dump()
+    if payload["type"] == DeviceType.SOLAR:
+        payload["current_power_kw"] = 0.0
+    device = Device(user_id=current_user.id, **payload)
     db.add(device)
     await db.commit()
     await db.refresh(device)
@@ -117,6 +121,8 @@ async def update_device(
     device = await _get_device(db, device_id, current_user.id)
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(device, key, value)
+    if device.type == DeviceType.SOLAR:
+        device.current_power_kw = 0.0
     if device.current_power_kw > device.max_power_kw:
         device.current_power_kw = device.max_power_kw
     await db.commit()

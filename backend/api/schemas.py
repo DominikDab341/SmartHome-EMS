@@ -40,6 +40,7 @@ class DeviceCreate(BaseModel):
 
 class DeviceUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=96)
+    type: DeviceType | None = None
     max_power_kw: float | None = Field(default=None, gt=0, le=25)
     current_power_kw: float | None = Field(default=None, ge=0, le=25)
     is_active: bool | None = None

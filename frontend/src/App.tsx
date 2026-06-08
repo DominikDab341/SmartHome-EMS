@@ -94,6 +94,14 @@ type AuthForm = {
   password: string
 }
 
+type DeviceForm = {
+  name: string
+  type: DeviceType
+  maxPowerKw: string
+  currentPowerKw: string
+  isActive: boolean
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const TOKEN_STORAGE_KEY = 'smart-home-ems-token'
 
@@ -101,6 +109,14 @@ const strategyLabels: Record<StrategyType, string> = {
   maximize_profit: 'Profit',
   eco_friendly: 'Eco',
   battery_life: 'Battery',
+}
+
+const emptyDeviceForm: DeviceForm = {
+  name: '',
+  type: 'appliance',
+  maxPowerKw: '1.0',
+  currentPowerKw: '0.5',
+  isActive: true,
 }
 
 class ApiError extends Error {
@@ -196,6 +212,71 @@ function authErrorMessage(error: unknown): string {
   return 'Nie udalo sie polaczyc z API.'
 }
 
+function deviceFormFromDevice(device: Device): DeviceForm {
+  return {
+    name: device.name,
+    type: device.type,
+    maxPowerKw: String(device.max_power_kw),
+    currentPowerKw: String(device.current_power_kw),
+    isActive: device.is_active,
+  }
+}
+
+function parseDevicePower(value: string): number {
+  return Number(value.replace(',', '.'))
+}
+
+function validateDeviceForm(form: DeviceForm): string | null {
+  const name = form.name.trim()
+  const maxPower = parseDevicePower(form.maxPowerKw)
+  const currentPower = parseDevicePower(form.currentPowerKw)
+
+  if (name.length < 2) {
+    return 'Nazwa musi miec co najmniej 2 znaki.'
+  }
+
+  if (!Number.isFinite(maxPower) || maxPower <= 0 || maxPower > 25) {
+    return 'Moc maksymalna musi byc wieksza od 0 i nie wieksza niz 25 kW.'
+  }
+
+  if (form.type === 'appliance') {
+    if (!Number.isFinite(currentPower) || currentPower < 0 || currentPower > 25) {
+      return 'Aktualna moc musi byc w zakresie od 0 do 25 kW.'
+    }
+
+    if (currentPower > maxPower) {
+      return 'Aktualna moc nie moze byc wieksza od mocy maksymalnej.'
+    }
+  }
+
+  return null
+}
+
+function devicePayloadFromForm(form: DeviceForm) {
+  const type = form.type
+  const maxPower = parseDevicePower(form.maxPowerKw)
+  const currentPower = type === 'solar' ? 0 : parseDevicePower(form.currentPowerKw)
+
+  return {
+    name: form.name.trim(),
+    type,
+    max_power_kw: Number(maxPower.toFixed(2)),
+    current_power_kw: Number(currentPower.toFixed(2)),
+    is_active: form.isActive,
+  }
+}
+
+function deviceErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 422) {
+      return 'Sprawdz nazwe, typ oraz wartosci mocy urzadzenia.'
+    }
+    return error.message
+  }
+
+  return 'Nie udalo sie zapisac zmian urzadzenia.'
+}
+
 function App() {
   const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY)
   const [token, setToken] = useState<string | null>(storedToken)
@@ -213,6 +294,11 @@ function App() {
   const [lastSnapshot, setLastSnapshot] = useState<Snapshot | null>(null)
   const [status, setStatus] = useState(storedToken ? 'Connecting' : 'Offline')
   const [busy, setBusy] = useState(false)
+  const [deviceForm, setDeviceForm] = useState<DeviceForm>(emptyDeviceForm)
+  const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null)
+  const [pendingDeleteDeviceId, setPendingDeleteDeviceId] = useState<number | null>(null)
+  const [deviceBusy, setDeviceBusy] = useState(false)
+  const [deviceError, setDeviceError] = useState<string | null>(null)
 
   const clearSession = useCallback(() => {
     localStorage.removeItem(TOKEN_STORAGE_KEY)
@@ -221,6 +307,10 @@ function App() {
     setCheckingSession(false)
     setDashboard(null)
     setLastSnapshot(null)
+    setDeviceForm(emptyDeviceForm)
+    setEditingDeviceId(null)
+    setPendingDeleteDeviceId(null)
+    setDeviceError(null)
     setStatus('Offline')
   }, [])
 
@@ -265,6 +355,34 @@ function App() {
       log.total_production_kwh,
     ]) ?? [0.01]),
   )
+
+  const deviceStats = useMemo(() => {
+    const devices = dashboard?.devices ?? []
+
+    return {
+      total: devices.length,
+      active: devices.filter((device) => device.is_active).length,
+      appliances: devices.filter((device) => device.type === 'appliance').length,
+      solar: devices.filter((device) => device.type === 'solar').length,
+    }
+  }, [dashboard])
+
+  const sortedDeviceGroups = useMemo(() => {
+    const devices = dashboard?.devices ?? []
+    const collator = new Intl.Collator('pl', {
+      numeric: true,
+      sensitivity: 'base',
+    })
+    const byName = (first: Device, second: Device) =>
+      collator.compare(first.name, second.name)
+
+    return {
+      appliances: devices.filter((device) => device.type === 'appliance').sort(byName),
+      solar: devices.filter((device) => device.type === 'solar').sort(byName),
+    }
+  }, [dashboard])
+
+  const devicePanelReady = dashboard !== null
 
   useEffect(() => {
     if (!token) {
@@ -377,6 +495,113 @@ function App() {
     setAuthError(null)
   }
 
+  function updateDeviceFormField<K extends keyof DeviceForm>(
+    field: K,
+    value: DeviceForm[K],
+  ): void {
+    setDeviceForm((current) => {
+      const next = { ...current, [field]: value }
+
+      if (field === 'type' && value === 'solar') {
+        next.currentPowerKw = '0'
+      }
+
+      return next
+    })
+    setDeviceError(null)
+    setPendingDeleteDeviceId(null)
+  }
+
+  function resetDeviceForm(): void {
+    setDeviceForm(emptyDeviceForm)
+    setEditingDeviceId(null)
+    setPendingDeleteDeviceId(null)
+    setDeviceError(null)
+  }
+
+  function editDevice(device: Device): void {
+    setDeviceForm(deviceFormFromDevice(device))
+    setEditingDeviceId(device.id)
+    setPendingDeleteDeviceId(null)
+    setDeviceError(null)
+  }
+
+  async function handleDeviceSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    if (!token || !devicePanelReady) return
+
+    const validationError = validateDeviceForm(deviceForm)
+    if (validationError) {
+      setDeviceError(validationError)
+      return
+    }
+
+    const payload = devicePayloadFromForm(deviceForm)
+    setDeviceBusy(true)
+    setDeviceError(null)
+    try {
+      if (editingDeviceId) {
+        await request<Device>(
+          `/api/ems/devices/${editingDeviceId}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+          },
+          token,
+        )
+      } else {
+        await request<Device>(
+          '/api/ems/devices',
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
+          token,
+        )
+      }
+
+      resetDeviceForm()
+      await loadDashboard(token)
+    } catch (error) {
+      setDeviceError(deviceErrorMessage(error))
+    } finally {
+      setDeviceBusy(false)
+    }
+  }
+
+  function requestDeleteDevice(device: Device): void {
+    setPendingDeleteDeviceId(device.id)
+    setDeviceError(null)
+  }
+
+  async function confirmDeleteDevice(device: Device): Promise<void> {
+    if (!token) return
+
+    setDeviceBusy(true)
+    setDeviceError(null)
+    try {
+      await request<void>(
+        `/api/ems/devices/${device.id}`,
+        {
+          method: 'DELETE',
+        },
+        token,
+      )
+
+      if (editingDeviceId === device.id) {
+        resetDeviceForm()
+      } else {
+        setPendingDeleteDeviceId(null)
+      }
+
+      await loadDashboard(token)
+    } catch (error) {
+      setDeviceError(deviceErrorMessage(error))
+    } finally {
+      setDeviceBusy(false)
+    }
+  }
+
   async function runTick(): Promise<void> {
     if (!token) return
 
@@ -450,6 +675,95 @@ function App() {
       token,
     )
     await loadDashboard(token)
+  }
+
+  function renderDeviceCard(device: Device) {
+    return (
+      <article
+        className={device.id === editingDeviceId ? 'device-card editing' : 'device-card'}
+        key={device.id}
+      >
+        <div>
+          <strong>
+            {device.name}
+            <span className={`device-type ${device.type}`}>
+              {device.type === 'solar' ? 'PV' : 'Load'}
+            </span>
+          </strong>
+          <span>
+            {device.type === 'solar'
+              ? `Capacity ${formatKw(device.max_power_kw)}`
+              : `${formatKw(device.current_power_kw)} / ${formatKw(device.max_power_kw)}`}
+          </span>
+        </div>
+        {device.type === 'appliance' ? (
+          <input
+            aria-label={`${device.name} power`}
+            type="range"
+            min="0"
+            max={device.max_power_kw}
+            step="0.1"
+            value={device.current_power_kw}
+            onChange={(event) =>
+              void updateDevicePower(device, Number(event.currentTarget.value))
+            }
+          />
+        ) : (
+          <div className="device-meter">
+            <span style={{ width: device.is_active ? '100%' : '0%' }} />
+          </div>
+        )}
+        <button
+          type="button"
+          className={device.is_active ? 'switch active' : 'switch'}
+          onClick={() => void toggleDevice(device)}
+          disabled={busy || deviceBusy}
+        >
+          {device.is_active ? 'On' : 'Off'}
+        </button>
+        <div className="device-actions">
+          {pendingDeleteDeviceId === device.id ? (
+            <>
+              <button
+                type="button"
+                className="danger-button compact-button"
+                onClick={() => void confirmDeleteDevice(device)}
+                disabled={deviceBusy}
+              >
+                Confirm
+              </button>
+              <button
+                type="button"
+                className="ghost-button compact-button"
+                onClick={() => setPendingDeleteDeviceId(null)}
+                disabled={deviceBusy}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="ghost-button compact-button"
+                onClick={() => editDevice(device)}
+                disabled={deviceBusy}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className="danger-button compact-button"
+                onClick={() => requestDeleteDevice(device)}
+                disabled={deviceBusy}
+              >
+                Delete
+              </button>
+            </>
+          )}
+        </div>
+      </article>
+    )
   }
 
   if (!token || (!user && !checkingSession)) {
@@ -658,43 +972,180 @@ function App() {
             </div>
           </section>
 
-          <section className="section-band">
+          <section className="section-band devices-section">
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Devices</p>
-                <h2>{dashboard?.devices.length ?? 0} active nodes</h2>
+                <h2>{deviceStats.active} enabled</h2>
+              </div>
+              <div className="device-summary">
+                <span>{deviceStats.total} total</span>
+                <span>{deviceStats.appliances} loads</span>
+                <span>{deviceStats.solar} PV</span>
               </div>
             </div>
-            <div className="device-list">
-              {dashboard?.devices.map((device) => (
-                <article className="device-card" key={device.id}>
-                  <div>
-                    <strong>{device.name}</strong>
-                    <span>{device.type === 'solar' ? 'Production' : formatKw(device.current_power_kw)}</span>
-                  </div>
-                  {device.type === 'appliance' && (
-                    <input
-                      aria-label={`${device.name} power`}
-                      type="range"
-                      min="0"
-                      max={device.max_power_kw}
-                      step="0.1"
-                      value={device.current_power_kw}
-                      onChange={(event) =>
-                        void updateDevicePower(device, Number(event.currentTarget.value))
-                      }
-                    />
-                  )}
+
+            <form className="device-form" onSubmit={(event) => void handleDeviceSubmit(event)}>
+              <div className="device-form-heading">
+                <div>
+                  <p className="eyebrow">{editingDeviceId ? 'Edit equipment' : 'New equipment'}</p>
+                  <h3>{editingDeviceId ? 'Update device' : 'Add device'}</h3>
+                </div>
+                {editingDeviceId && (
                   <button
                     type="button"
-                    className={device.is_active ? 'switch active' : 'switch'}
-                    onClick={() => void toggleDevice(device)}
-                    disabled={busy}
+                    className="ghost-button compact-button"
+                    onClick={resetDeviceForm}
+                    disabled={deviceBusy}
                   >
-                    {device.is_active ? 'On' : 'Off'}
+                    Cancel
                   </button>
-                </article>
-              )) ?? <p className="muted">No device data.</p>}
+                )}
+              </div>
+
+              <div className="device-form-grid">
+                <label className="wide-field">
+                  Name
+                  <input
+                    type="text"
+                    value={deviceForm.name}
+                    minLength={2}
+                    maxLength={96}
+                    placeholder="e.g. Heat pump"
+                    disabled={deviceBusy || !devicePanelReady}
+                    required
+                    onChange={(event) =>
+                      updateDeviceFormField('name', event.currentTarget.value)
+                    }
+                  />
+                </label>
+
+                <div className="form-field">
+                  <span>Type</span>
+                  <div className="type-toggle" role="group" aria-label="Device type">
+                    <button
+                      type="button"
+                      className={deviceForm.type === 'appliance' ? 'active' : ''}
+                      onClick={() => updateDeviceFormField('type', 'appliance')}
+                      disabled={deviceBusy || !devicePanelReady}
+                    >
+                      Load
+                    </button>
+                    <button
+                      type="button"
+                      className={deviceForm.type === 'solar' ? 'active' : ''}
+                      onClick={() => updateDeviceFormField('type', 'solar')}
+                      disabled={deviceBusy || !devicePanelReady}
+                    >
+                      PV
+                    </button>
+                  </div>
+                </div>
+
+                <label>
+                  Max kW
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="25"
+                    step="0.1"
+                    value={deviceForm.maxPowerKw}
+                    disabled={deviceBusy || !devicePanelReady}
+                    required
+                    onChange={(event) =>
+                      updateDeviceFormField('maxPowerKw', event.currentTarget.value)
+                    }
+                  />
+                </label>
+
+                <label>
+                  Current kW
+                  <input
+                    type="number"
+                    min="0"
+                    max={deviceForm.maxPowerKw || 25}
+                    step="0.1"
+                    value={deviceForm.currentPowerKw}
+                    disabled={deviceForm.type === 'solar' || deviceBusy || !devicePanelReady}
+                    required={deviceForm.type === 'appliance'}
+                    onChange={(event) =>
+                      updateDeviceFormField('currentPowerKw', event.currentTarget.value)
+                    }
+                  />
+                </label>
+
+                <label className="check-field">
+                  <input
+                    type="checkbox"
+                    checked={deviceForm.isActive}
+                    disabled={deviceBusy || !devicePanelReady}
+                    onChange={(event) =>
+                      updateDeviceFormField('isActive', event.currentTarget.checked)
+                    }
+                  />
+                  <span>Active</span>
+                </label>
+              </div>
+
+              {deviceError && <p className="device-error">{deviceError}</p>}
+
+              <div className="device-form-actions">
+                <button type="submit" disabled={deviceBusy || !devicePanelReady}>
+                  {deviceBusy
+                    ? 'Saving'
+                    : !devicePanelReady
+                      ? 'Loading'
+                      : editingDeviceId
+                        ? 'Save changes'
+                        : 'Add device'}
+                </button>
+                {!editingDeviceId && (
+                  <button
+                    type="button"
+                    className="ghost-button compact-button"
+                    onClick={resetDeviceForm}
+                    disabled={deviceBusy || !devicePanelReady}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </form>
+
+            <div className="device-groups">
+              <section className="device-group" aria-label="Load devices">
+                <div className="device-group-heading">
+                  <div>
+                    <p className="eyebrow">Load</p>
+                    <h3>Home equipment</h3>
+                  </div>
+                  <span>{sortedDeviceGroups.appliances.length}</span>
+                </div>
+                <div className="device-list">
+                  {sortedDeviceGroups.appliances.length ? (
+                    sortedDeviceGroups.appliances.map(renderDeviceCard)
+                  ) : (
+                    <p className="muted device-empty">No load devices.</p>
+                  )}
+                </div>
+              </section>
+
+              <section className="device-group" aria-label="PV devices">
+                <div className="device-group-heading">
+                  <div>
+                    <p className="eyebrow">PV</p>
+                    <h3>Solar production</h3>
+                  </div>
+                  <span>{sortedDeviceGroups.solar.length}</span>
+                </div>
+                <div className="device-list">
+                  {sortedDeviceGroups.solar.length ? (
+                    sortedDeviceGroups.solar.map(renderDeviceCard)
+                  ) : (
+                    <p className="muted device-empty">No PV devices.</p>
+                  )}
+                </div>
+              </section>
             </div>
           </section>
         </div>
