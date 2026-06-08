@@ -15,16 +15,20 @@ from database.database import SessionLocal, engine, get_db
 from database.models import User
 
 
+def _house_ids_for_users(users: list[User]) -> list[int]:
+    return sorted({user.house_id or user.id for user in users})
+
+
 async def _simulation_loop() -> None:
     while True:
         await asyncio.sleep(settings.SIMULATION_INTERVAL_SECONDS)
         try:
             async with SessionLocal() as db:
-                user_ids = list((await db.execute(select(User.id))).scalars().all())
-                for user_id in user_ids:
+                db_users = list((await db.execute(select(User))).scalars().all())
+                for house_id in _house_ids_for_users(db_users):
                     await energy_manager.run_cycle(
                         db,
-                        user_id,
+                        house_id,
                         settings.SIMULATION_INTERVAL_SECONDS,
                     )
         except (SQLAlchemyError, RuntimeError):
@@ -33,9 +37,9 @@ async def _simulation_loop() -> None:
 
 async def _seed_existing_users() -> None:
     async with SessionLocal() as db:
-        user_ids = list((await db.execute(select(User.id))).scalars().all())
-        for user_id in user_ids:
-            await energy_manager.ensure_seed_data(db, user_id)
+        db_users = list((await db.execute(select(User))).scalars().all())
+        for house_id in _house_ids_for_users(db_users):
+            await energy_manager.ensure_seed_data(db, house_id)
 
 
 @asynccontextmanager

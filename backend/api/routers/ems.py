@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.dependencies import get_current_user
+from api.dependencies import get_current_owner, get_current_user, house_scope_id
 from api.schemas import (
     BatteryPublic,
     BatteryUpdate,
@@ -30,12 +30,13 @@ router = APIRouter(prefix="/api/ems", tags=["ems"])
 async def seed_demo_data(
     reset: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> None:
+    house_id = house_scope_id(current_owner)
     if reset:
-        await energy_manager.reset_seed_data(db, current_user.id)
+        await energy_manager.reset_seed_data(db, house_id)
         return
-    await energy_manager.ensure_seed_data(db, current_user.id)
+    await energy_manager.ensure_seed_data(db, house_id)
 
 
 @router.get("/dashboard", response_model=DashboardPublic)
@@ -43,23 +44,24 @@ async def get_dashboard(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> DashboardPublic:
-    await energy_manager.ensure_seed_data(db, current_user.id)
+    house_id = house_scope_id(current_user)
+    await energy_manager.ensure_seed_data(db, house_id)
     devices = list(
         (
             await db.execute(
-                select(Device).where(Device.user_id == current_user.id).order_by(Device.id)
+                select(Device).where(Device.user_id == house_id).order_by(Device.id)
             )
         )
         .scalars()
         .all()
     )
-    battery = await _get_battery(db, current_user.id)
-    settings = await _get_settings(db, current_user.id)
+    battery = await _get_battery(db, house_id)
+    settings = await _get_settings(db, house_id)
     logs = list(
         (
             await db.execute(
                 select(EnergyLog)
-                .where(EnergyLog.user_id == current_user.id)
+                .where(EnergyLog.user_id == house_id)
                 .order_by(desc(EnergyLog.timestamp))
                 .limit(24)
             )
@@ -81,11 +83,12 @@ async def list_devices(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[DevicePublic]:
-    await energy_manager.ensure_seed_data(db, current_user.id)
+    house_id = house_scope_id(current_user)
+    await energy_manager.ensure_seed_data(db, house_id)
     devices = list(
         (
             await db.execute(
-                select(Device).where(Device.user_id == current_user.id).order_by(Device.id)
+                select(Device).where(Device.user_id == house_id).order_by(Device.id)
             )
         )
         .scalars()
@@ -98,13 +101,14 @@ async def list_devices(
 async def create_device(
     body: DeviceCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> DevicePublic:
-    await energy_manager.ensure_seed_data(db, current_user.id)
+    house_id = house_scope_id(current_owner)
+    await energy_manager.ensure_seed_data(db, house_id)
     payload = body.model_dump()
     if payload["type"] == DeviceType.SOLAR:
         payload["current_power_kw"] = 0.0
-    device = Device(user_id=current_user.id, **payload)
+    device = Device(user_id=house_id, **payload)
     db.add(device)
     await db.commit()
     await db.refresh(device)
@@ -116,9 +120,9 @@ async def update_device(
     device_id: int,
     body: DeviceUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> DevicePublic:
-    device = await _get_device(db, device_id, current_user.id)
+    device = await _get_device(db, device_id, house_scope_id(current_owner))
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(device, key, value)
     if device.type == DeviceType.SOLAR:
@@ -134,9 +138,9 @@ async def update_device(
 async def toggle_device(
     device_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> DevicePublic:
-    device = await _get_device(db, device_id, current_user.id)
+    device = await _get_device(db, device_id, house_scope_id(current_owner))
     device.is_active = not device.is_active
     if not device.is_active:
         device.current_power_kw = 0.0
@@ -151,9 +155,9 @@ async def toggle_device(
 async def delete_device(
     device_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> None:
-    device = await _get_device(db, device_id, current_user.id)
+    device = await _get_device(db, device_id, house_scope_id(current_owner))
     await db.delete(device)
     await db.commit()
 
@@ -163,17 +167,18 @@ async def get_battery_state(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> BatteryPublic:
-    await energy_manager.ensure_seed_data(db, current_user.id)
-    return BatteryPublic.model_validate(await _get_battery(db, current_user.id))
+    house_id = house_scope_id(current_user)
+    await energy_manager.ensure_seed_data(db, house_id)
+    return BatteryPublic.model_validate(await _get_battery(db, house_id))
 
 
 @router.patch("/battery", response_model=BatteryPublic)
 async def update_battery(
     body: BatteryUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> BatteryPublic:
-    battery = await _get_battery(db, current_user.id)
+    battery = await _get_battery(db, house_scope_id(current_owner))
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(battery, key, value)
     battery.current_charge_kwh = min(battery.current_charge_kwh, battery.total_capacity_kwh)
@@ -187,17 +192,18 @@ async def get_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> SystemSettingsPublic:
-    await energy_manager.ensure_seed_data(db, current_user.id)
-    return SystemSettingsPublic.model_validate(await _get_settings(db, current_user.id))
+    house_id = house_scope_id(current_user)
+    await energy_manager.ensure_seed_data(db, house_id)
+    return SystemSettingsPublic.model_validate(await _get_settings(db, house_id))
 
 
 @router.patch("/settings", response_model=SystemSettingsPublic)
 async def update_settings(
     body: SystemSettingsUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> SystemSettingsPublic:
-    settings = await _get_settings(db, current_user.id)
+    settings = await _get_settings(db, house_scope_id(current_owner))
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(settings, key, value)
     await db.commit()
@@ -209,9 +215,9 @@ async def update_settings(
 async def set_strategy(
     body: StrategyRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> SystemSettingsPublic:
-    settings = await _get_settings(db, current_user.id)
+    settings = await _get_settings(db, house_scope_id(current_owner))
     settings.active_strategy = body.strategy
     energy_manager.set_strategy(body.strategy)
     await db.commit()
@@ -225,12 +231,13 @@ async def list_logs(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[EnergyLogPublic]:
+    house_id = house_scope_id(current_user)
     bounded_limit = max(1, min(limit, 200))
     logs = list(
         (
             await db.execute(
                 select(EnergyLog)
-                .where(EnergyLog.user_id == current_user.id)
+                .where(EnergyLog.user_id == house_id)
                 .order_by(desc(EnergyLog.timestamp))
                 .limit(bounded_limit)
             )
@@ -244,9 +251,9 @@ async def list_logs(
 @router.post("/simulation/tick", response_model=EnergySnapshotPublic)
 async def run_simulation_tick(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_owner: User = Depends(get_current_owner),
 ) -> EnergySnapshotPublic:
-    snapshot = await energy_manager.run_cycle(db, current_user.id)
+    snapshot = await energy_manager.run_cycle(db, house_scope_id(current_owner))
     return EnergySnapshotPublic.model_validate(snapshot)
 
 

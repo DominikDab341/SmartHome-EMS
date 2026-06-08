@@ -54,9 +54,11 @@ async def test_user():
             username=TEST_USERNAME,
             email="test_auth@example.com",
             hashed_password=hash_password(TEST_PASSWORD),
-            role=UserRole.RESIDENT,
+            role=UserRole.OWNER,
         )
         session.add(user)
+        await session.flush()
+        user.house_id = user.id
         await session.commit()
 
     yield
@@ -169,7 +171,8 @@ async def test_register_success_returns_201_with_user_data():
     body = response.json()
     assert body["username"] == REG_USERNAME
     assert body["email"] == REG_EMAIL
-    assert body["role"] == "RESIDENT"
+    assert body["role"] == "OWNER"
+    assert body["house_id"] == body["id"]
     assert "hashed_password" not in body
     assert "password" not in body
 

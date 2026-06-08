@@ -20,12 +20,17 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8, description="At least 8 characters")
 
 
+class ResidentCreateRequest(RegisterRequest):
+    """Request body for creating a resident account inside the owner's house."""
+
+
 class UserPublic(BaseModel):
     """Public representation of a user (no password fields)."""
     id: int
     username: str
     email: str
     role: UserRole
+    house_id: int | None = None
 
     model_config = {"from_attributes": True}
 

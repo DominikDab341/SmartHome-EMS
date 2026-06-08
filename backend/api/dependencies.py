@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.security import decode_access_token
 from database.database import get_db
-from database.models import User
+from database.models import User, UserRole
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -62,3 +62,20 @@ async def get_current_user(
         raise _credentials_exception()
 
     return user
+
+
+def house_scope_id(user: User) -> int:
+    """Return the owner/house id used to scope EMS data for a user."""
+    return user.house_id or user.id
+
+
+async def get_current_owner(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Return the current user only if they can manage the house."""
+    if current_user.role not in {UserRole.ADMIN, UserRole.OWNER}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner permissions required",
+        )
+    return current_user
