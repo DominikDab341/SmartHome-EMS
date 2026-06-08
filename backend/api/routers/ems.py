@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.dependencies import get_current_user
 from api.schemas import (
     BatteryPublic,
     BatteryUpdate,
@@ -19,7 +20,7 @@ from api.schemas import (
 )
 from core.manager import energy_manager
 from database.database import get_db
-from database.models import Battery, Device, EnergyLog, SystemSettings
+from database.models import Battery, Device, EnergyLog, SystemSettings, User
 
 
 router = APIRouter(prefix="/api/ems", tags=["ems"])
@@ -29,22 +30,39 @@ router = APIRouter(prefix="/api/ems", tags=["ems"])
 async def seed_demo_data(
     reset: bool = False,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> None:
     if reset:
-        await energy_manager.reset_seed_data(db)
+        await energy_manager.reset_seed_data(db, current_user.id)
         return
-    await energy_manager.ensure_seed_data(db)
+    await energy_manager.ensure_seed_data(db, current_user.id)
 
 
 @router.get("/dashboard", response_model=DashboardPublic)
-async def get_dashboard(db: AsyncSession = Depends(get_db)) -> DashboardPublic:
-    await energy_manager.ensure_seed_data(db)
-    devices = list((await db.execute(select(Device).order_by(Device.id))).scalars().all())
-    battery = await _get_battery(db)
-    settings = await _get_settings(db)
+async def get_dashboard(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DashboardPublic:
+    await energy_manager.ensure_seed_data(db, current_user.id)
+    devices = list(
+        (
+            await db.execute(
+                select(Device).where(Device.user_id == current_user.id).order_by(Device.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    battery = await _get_battery(db, current_user.id)
+    settings = await _get_settings(db, current_user.id)
     logs = list(
         (
-            await db.execute(select(EnergyLog).order_by(desc(EnergyLog.timestamp)).limit(24))
+            await db.execute(
+                select(EnergyLog)
+                .where(EnergyLog.user_id == current_user.id)
+                .order_by(desc(EnergyLog.timestamp))
+                .limit(24)
+            )
         )
         .scalars()
         .all()
@@ -59,9 +77,20 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)) -> DashboardPublic:
 
 
 @router.get("/devices", response_model=list[DevicePublic])
-async def list_devices(db: AsyncSession = Depends(get_db)) -> list[DevicePublic]:
-    await energy_manager.ensure_seed_data(db)
-    devices = list((await db.execute(select(Device).order_by(Device.id))).scalars().all())
+async def list_devices(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[DevicePublic]:
+    await energy_manager.ensure_seed_data(db, current_user.id)
+    devices = list(
+        (
+            await db.execute(
+                select(Device).where(Device.user_id == current_user.id).order_by(Device.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     return [DevicePublic.model_validate(device) for device in devices]
 
 
@@ -69,8 +98,9 @@ async def list_devices(db: AsyncSession = Depends(get_db)) -> list[DevicePublic]
 async def create_device(
     body: DeviceCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> DevicePublic:
-    device = Device(**body.model_dump())
+    device = Device(user_id=current_user.id, **body.model_dump())
     db.add(device)
     await db.commit()
     await db.refresh(device)
@@ -82,8 +112,9 @@ async def update_device(
     device_id: int,
     body: DeviceUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> DevicePublic:
-    device = await _get_device(db, device_id)
+    device = await _get_device(db, device_id, current_user.id)
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(device, key, value)
     if device.current_power_kw > device.max_power_kw:
@@ -97,8 +128,9 @@ async def update_device(
 async def toggle_device(
     device_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> DevicePublic:
-    device = await _get_device(db, device_id)
+    device = await _get_device(db, device_id, current_user.id)
     device.is_active = not device.is_active
     if not device.is_active:
         device.current_power_kw = 0.0
@@ -113,24 +145,29 @@ async def toggle_device(
 async def delete_device(
     device_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    device = await _get_device(db, device_id)
+    device = await _get_device(db, device_id, current_user.id)
     await db.delete(device)
     await db.commit()
 
 
 @router.get("/battery", response_model=BatteryPublic)
-async def get_battery_state(db: AsyncSession = Depends(get_db)) -> BatteryPublic:
-    await energy_manager.ensure_seed_data(db)
-    return BatteryPublic.model_validate(await _get_battery(db))
+async def get_battery_state(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> BatteryPublic:
+    await energy_manager.ensure_seed_data(db, current_user.id)
+    return BatteryPublic.model_validate(await _get_battery(db, current_user.id))
 
 
 @router.patch("/battery", response_model=BatteryPublic)
 async def update_battery(
     body: BatteryUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> BatteryPublic:
-    battery = await _get_battery(db)
+    battery = await _get_battery(db, current_user.id)
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(battery, key, value)
     battery.current_charge_kwh = min(battery.current_charge_kwh, battery.total_capacity_kwh)
@@ -140,17 +177,21 @@ async def update_battery(
 
 
 @router.get("/settings", response_model=SystemSettingsPublic)
-async def get_settings(db: AsyncSession = Depends(get_db)) -> SystemSettingsPublic:
-    await energy_manager.ensure_seed_data(db)
-    return SystemSettingsPublic.model_validate(await _get_settings(db))
+async def get_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> SystemSettingsPublic:
+    await energy_manager.ensure_seed_data(db, current_user.id)
+    return SystemSettingsPublic.model_validate(await _get_settings(db, current_user.id))
 
 
 @router.patch("/settings", response_model=SystemSettingsPublic)
 async def update_settings(
     body: SystemSettingsUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> SystemSettingsPublic:
-    settings = await _get_settings(db)
+    settings = await _get_settings(db, current_user.id)
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(settings, key, value)
     await db.commit()
@@ -162,8 +203,9 @@ async def update_settings(
 async def set_strategy(
     body: StrategyRequest,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> SystemSettingsPublic:
-    settings = await _get_settings(db)
+    settings = await _get_settings(db, current_user.id)
     settings.active_strategy = body.strategy
     energy_manager.set_strategy(body.strategy)
     await db.commit()
@@ -175,12 +217,16 @@ async def set_strategy(
 async def list_logs(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> list[EnergyLogPublic]:
     bounded_limit = max(1, min(limit, 200))
     logs = list(
         (
             await db.execute(
-                select(EnergyLog).order_by(desc(EnergyLog.timestamp)).limit(bounded_limit)
+                select(EnergyLog)
+                .where(EnergyLog.user_id == current_user.id)
+                .order_by(desc(EnergyLog.timestamp))
+                .limit(bounded_limit)
             )
         )
         .scalars()
@@ -190,27 +236,34 @@ async def list_logs(
 
 
 @router.post("/simulation/tick", response_model=EnergySnapshotPublic)
-async def run_simulation_tick(db: AsyncSession = Depends(get_db)) -> EnergySnapshotPublic:
-    snapshot = await energy_manager.run_cycle(db)
+async def run_simulation_tick(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> EnergySnapshotPublic:
+    snapshot = await energy_manager.run_cycle(db, current_user.id)
     return EnergySnapshotPublic.model_validate(snapshot)
 
 
-async def _get_device(db: AsyncSession, device_id: int) -> Device:
-    device = await db.get(Device, device_id)
+async def _get_device(db: AsyncSession, device_id: int, user_id: int) -> Device:
+    device = await db.scalar(
+        select(Device).where(Device.id == device_id, Device.user_id == user_id)
+    )
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
     return device
 
 
-async def _get_battery(db: AsyncSession) -> Battery:
-    battery = await db.scalar(select(Battery).limit(1))
+async def _get_battery(db: AsyncSession, user_id: int) -> Battery:
+    battery = await db.scalar(select(Battery).where(Battery.user_id == user_id).limit(1))
     if battery is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Battery not found")
     return battery
 
 
-async def _get_settings(db: AsyncSession) -> SystemSettings:
-    settings = await db.scalar(select(SystemSettings).limit(1))
+async def _get_settings(db: AsyncSession, user_id: int) -> SystemSettings:
+    settings = await db.scalar(
+        select(SystemSettings).where(SystemSettings.user_id == user_id).limit(1)
+    )
     if settings is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Settings not found")
     return settings

@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -63,6 +63,11 @@ class Device(Base):
     __tablename__ = "devices"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(96), nullable=False, index=True)
     type: Mapped[DeviceType] = mapped_column(
         SAEnum(DeviceType, name="devicetype", create_type=True),
@@ -86,6 +91,12 @@ class Battery(Base):
     __tablename__ = "batteries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     total_capacity_kwh: Mapped[float] = mapped_column(Float, nullable=False, default=10.0)
     current_charge_kwh: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
     min_safe_percentage: Mapped[float] = mapped_column(Float, nullable=False, default=20.0)
@@ -105,6 +116,12 @@ class SystemSettings(Base):
     __tablename__ = "system_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     active_strategy: Mapped[StrategyType] = mapped_column(
         SAEnum(StrategyType, name="strategytype", create_type=True),
         nullable=False,
@@ -123,6 +140,11 @@ class EnergyLog(Base):
     __tablename__ = "energy_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

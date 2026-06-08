@@ -54,19 +54,20 @@ class EnergyManager:
     def set_strategy(self, strategy_type: StrategyType) -> None:
         self.strategy = strategy_for(strategy_type)
 
-    async def reset_seed_data(self, db: AsyncSession) -> None:
-        """Clear simulation tables and recreate demo data from current code."""
-        await db.execute(delete(EnergyLog))
-        await db.execute(delete(Device))
-        await db.execute(delete(Battery))
-        await db.execute(delete(SystemSettings))
+    async def reset_seed_data(self, db: AsyncSession, user_id: int) -> None:
+        """Clear one user's simulation tables and recreate demo data from current code."""
+        await db.execute(delete(EnergyLog).where(EnergyLog.user_id == user_id))
+        await db.execute(delete(Device).where(Device.user_id == user_id))
+        await db.execute(delete(Battery).where(Battery.user_id == user_id))
+        await db.execute(delete(SystemSettings).where(SystemSettings.user_id == user_id))
         await db.commit()
-        await self.ensure_seed_data(db)
+        await self.ensure_seed_data(db, user_id)
 
-    async def ensure_seed_data(self, db: AsyncSession) -> None:
-        if await db.scalar(select(Battery.id).limit(1)) is None:
+    async def ensure_seed_data(self, db: AsyncSession, user_id: int) -> None:
+        if await db.scalar(select(Battery.id).where(Battery.user_id == user_id).limit(1)) is None:
             db.add(
                 Battery(
+                    user_id=user_id,
                     total_capacity_kwh=13.5,
                     current_charge_kwh=7.4,
                     min_safe_percentage=20.0,
@@ -75,9 +76,12 @@ class EnergyManager:
                 )
             )
 
-        if await db.scalar(select(SystemSettings.id).limit(1)) is None:
+        if await db.scalar(
+            select(SystemSettings.id).where(SystemSettings.user_id == user_id).limit(1)
+        ) is None:
             db.add(
                 SystemSettings(
+                    user_id=user_id,
                     active_strategy=StrategyType.ECO_FRIENDLY,
                     grid_buy_price=0.95,
                     grid_sell_price=0.42,
@@ -87,10 +91,11 @@ class EnergyManager:
                 )
             )
 
-        if await db.scalar(select(Device.id).limit(1)) is None:
+        if await db.scalar(select(Device.id).where(Device.user_id == user_id).limit(1)) is None:
             for simulated in ApplianceFactory.default_home():
                 db.add(
                     Device(
+                        user_id=user_id,
                         name=simulated.name,
                         type=simulated.type,
                         max_power_kw=simulated.max_power_kw,
@@ -101,7 +106,12 @@ class EnergyManager:
 
         await db.commit()
 
-    async def run_cycle(self, db: AsyncSession, interval_seconds: int = 60) -> EnergySnapshot:
+    async def run_cycle(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        interval_seconds: int = 60,
+    ) -> EnergySnapshot:
         """Run one EMS tick and persist the resulting flow snapshot.
 
         The simulation treats every tick as an interval of energy use. Device
@@ -109,10 +119,14 @@ class EnergyManager:
         WeatherAdapter, then the selected Strategy decides grid and battery flow.
         """
         async with self._lock:
-            await self.ensure_seed_data(db)
-            settings = await self._get_settings(db)
-            battery = await self._get_battery(db)
-            devices = list((await db.execute(select(Device))).scalars().all())
+            await self.ensure_seed_data(db, user_id)
+            settings = await self._get_settings(db, user_id)
+            battery = await self._get_battery(db, user_id)
+            devices = list(
+                (await db.execute(select(Device).where(Device.user_id == user_id)))
+                .scalars()
+                .all()
+            )
             self.set_strategy(settings.active_strategy)
 
             interval_hours = interval_seconds / 3600
@@ -143,6 +157,7 @@ class EnergyManager:
                 ),
             )
             log = EnergyLog(
+                user_id=user_id,
                 total_consumption_kwh=round(consumption_kwh, 4),
                 total_production_kwh=round(production_kwh, 4),
                 grid_bought_kwh=round(decision.grid_bought_kwh, 4),
@@ -201,15 +216,17 @@ class EnergyManager:
         )
 
     @staticmethod
-    async def _get_battery(db: AsyncSession) -> Battery:
-        battery = await db.scalar(select(Battery).limit(1))
+    async def _get_battery(db: AsyncSession, user_id: int) -> Battery:
+        battery = await db.scalar(select(Battery).where(Battery.user_id == user_id).limit(1))
         if battery is None:
             raise RuntimeError("Battery seed data was not created.")
         return battery
 
     @staticmethod
-    async def _get_settings(db: AsyncSession) -> SystemSettings:
-        settings = await db.scalar(select(SystemSettings).limit(1))
+    async def _get_settings(db: AsyncSession, user_id: int) -> SystemSettings:
+        settings = await db.scalar(
+            select(SystemSettings).where(SystemSettings.user_id == user_id).limit(1)
+        )
         if settings is None:
             raise RuntimeError("System settings seed data was not created.")
         return settings

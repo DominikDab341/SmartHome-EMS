@@ -4,7 +4,7 @@ import asyncio
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,7 @@ from api.routers import auth, ems, users
 from core.manager import energy_manager
 from database.config import settings
 from database.database import SessionLocal, engine, get_db
+from database.models import User
 
 
 async def _simulation_loop() -> None:
@@ -19,16 +20,28 @@ async def _simulation_loop() -> None:
         await asyncio.sleep(settings.SIMULATION_INTERVAL_SECONDS)
         try:
             async with SessionLocal() as db:
-                await energy_manager.run_cycle(db, settings.SIMULATION_INTERVAL_SECONDS)
+                user_ids = list((await db.execute(select(User.id))).scalars().all())
+                for user_id in user_ids:
+                    await energy_manager.run_cycle(
+                        db,
+                        user_id,
+                        settings.SIMULATION_INTERVAL_SECONDS,
+                    )
         except (SQLAlchemyError, RuntimeError):
             continue
+
+
+async def _seed_existing_users() -> None:
+    async with SessionLocal() as db:
+        user_ids = list((await db.execute(select(User.id))).scalars().all())
+        for user_id in user_ids:
+            await energy_manager.ensure_seed_data(db, user_id)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        async with SessionLocal() as db:
-            await energy_manager.ensure_seed_data(db)
+        await _seed_existing_users()
     except SQLAlchemyError:
         pass
     task = asyncio.create_task(_simulation_loop())
