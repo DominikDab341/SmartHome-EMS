@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import './App.css'
 
 type DeviceType = 'appliance' | 'solar'
 type StrategyType = 'maximize_profit' | 'eco_friendly' | 'battery_life'
+type AuthMode = 'login' | 'register'
 
 type Device = {
   id: number
@@ -75,7 +76,26 @@ type Snapshot = {
   }
 }
 
+type TokenResponse = {
+  access_token: string
+  token_type: string
+}
+
+type UserProfile = {
+  id: number
+  username: string
+  email: string
+  role: 'ADMIN' | 'OWNER' | 'RESIDENT'
+}
+
+type AuthForm = {
+  username: string
+  email: string
+  password: string
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+const TOKEN_STORAGE_KEY = 'smart-home-ems-token'
 
 const strategyLabels: Record<StrategyType, string> = {
   maximize_profit: 'Profit',
@@ -83,14 +103,65 @@ const strategyLabels: Record<StrategyType, string> = {
   battery_life: 'Battery',
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
-    ...init,
-  })
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`)
+class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
   }
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown }
+    if (typeof body.detail === 'string') {
+      return body.detail
+    }
+    if (Array.isArray(body.detail)) {
+      return 'Nieprawidlowe dane formularza.'
+    }
+  } catch {
+    return `HTTP ${response.status}`
+  }
+
+  return `HTTP ${response.status}`
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  token?: string | null,
+): Promise<T> {
+  const headers = new Headers(init.headers)
+  const body = init.body
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  if (
+    body &&
+    !(body instanceof FormData) &&
+    !(body instanceof URLSearchParams) &&
+    !headers.has('Content-Type')
+  ) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers,
+  })
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readErrorMessage(response))
+  }
+
+  if (response.status === 204) {
+    return undefined as T
+  }
+
   return (await response.json()) as T
 }
 
@@ -106,11 +177,73 @@ function formatMoney(value: number): string {
   return `${value.toFixed(2)} PLN`
 }
 
+function authErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return 'Nieprawidlowa nazwa uzytkownika lub haslo.'
+    }
+    if (error.status === 409) {
+      return error.message.toLowerCase().includes('email')
+        ? 'Ten adres email jest juz zarejestrowany.'
+        : 'Ta nazwa uzytkownika jest juz zajeta.'
+    }
+    if (error.status === 422) {
+      return 'Sprawdz email, nazwe uzytkownika i haslo minimum 8 znakow.'
+    }
+    return error.message
+  }
+
+  return 'Nie udalo sie polaczyc z API.'
+}
+
 function App() {
+  const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY)
+  const [token, setToken] = useState<string | null>(storedToken)
+  const [user, setUser] = useState<UserProfile | null>(null)
+  const [checkingSession, setCheckingSession] = useState(Boolean(storedToken))
+  const [authMode, setAuthMode] = useState<AuthMode>('login')
+  const [authForm, setAuthForm] = useState<AuthForm>({
+    username: '',
+    email: '',
+    password: '',
+  })
+  const [authError, setAuthError] = useState<string | null>(null)
+  const [authBusy, setAuthBusy] = useState(false)
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
   const [lastSnapshot, setLastSnapshot] = useState<Snapshot | null>(null)
-  const [status, setStatus] = useState('Connecting')
+  const [status, setStatus] = useState(storedToken ? 'Connecting' : 'Offline')
   const [busy, setBusy] = useState(false)
+
+  const clearSession = useCallback(() => {
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    setToken(null)
+    setUser(null)
+    setCheckingSession(false)
+    setDashboard(null)
+    setLastSnapshot(null)
+    setStatus('Offline')
+  }, [])
+
+  const loadDashboard = useCallback(
+    async (authToken = token): Promise<void> => {
+      if (!authToken) {
+        return
+      }
+
+      try {
+        const data = await request<Dashboard>('/api/ems/dashboard', undefined, authToken)
+        setDashboard(data)
+        setStatus('Online')
+      } catch (error) {
+        setStatus('Offline')
+        if (error instanceof ApiError && error.status === 401) {
+          clearSession()
+          setAuthError('Sesja wygasla. Zaloguj sie ponownie.')
+        }
+      }
+    },
+    [clearSession, token],
+  )
 
   const activeConsumption = useMemo(() => {
     return dashboard?.devices
@@ -133,68 +266,172 @@ function App() {
     ]) ?? [0.01]),
   )
 
-  async function loadDashboard(): Promise<void> {
-    try {
-      const data = await request<Dashboard>('/api/ems/dashboard')
-      setDashboard(data)
-      setStatus('Online')
-    } catch {
-      setStatus('Offline')
+  useEffect(() => {
+    if (!token) {
+      return
     }
-  }
+
+    let cancelled = false
+
+    request<UserProfile>('/api/users/me', undefined, token)
+      .then((profile) => {
+        if (!cancelled) {
+          setUser(profile)
+          setStatus('Online')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          clearSession()
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setCheckingSession(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [clearSession, token])
 
   useEffect(() => {
+    if (!token || !user) {
+      return undefined
+    }
+
     const initialLoad = window.setTimeout(() => {
-      void loadDashboard()
+      void loadDashboard(token)
     }, 0)
     const timer = window.setInterval(() => {
-      void loadDashboard()
+      void loadDashboard(token)
     }, 10000)
+
     return () => {
       window.clearTimeout(initialLoad)
       window.clearInterval(timer)
     }
-  }, [])
+  }, [loadDashboard, token, user])
+
+  function updateAuthField(field: keyof AuthForm, value: string): void {
+    setAuthForm((current) => ({ ...current, [field]: value }))
+  }
+
+  function switchAuthMode(mode: AuthMode): void {
+    setAuthMode(mode)
+    setAuthError(null)
+  }
+
+  async function loginWithCredentials(username: string, password: string): Promise<TokenResponse> {
+    return request<TokenResponse>('/api/auth/login', {
+      method: 'POST',
+      body: new URLSearchParams({ username, password }),
+    })
+  }
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    setAuthError(null)
+
+    const username = authForm.username.trim()
+    const email = authForm.email.trim()
+    const password = authForm.password
+
+    if (!username || !password || (authMode === 'register' && !email)) {
+      setAuthError('Uzupelnij wszystkie wymagane pola.')
+      return
+    }
+
+    setAuthBusy(true)
+    try {
+      if (authMode === 'register') {
+        await request<UserProfile>('/api/auth/register', {
+          method: 'POST',
+          body: JSON.stringify({ username, email, password }),
+        })
+      }
+
+      const tokenResponse = await loginWithCredentials(username, password)
+      localStorage.setItem(TOKEN_STORAGE_KEY, tokenResponse.access_token)
+      setToken(tokenResponse.access_token)
+
+      const profile = await request<UserProfile>(
+        '/api/users/me',
+        undefined,
+        tokenResponse.access_token,
+      )
+      setUser(profile)
+      setCheckingSession(false)
+      setAuthForm({ username: '', email: '', password: '' })
+      await loadDashboard(tokenResponse.access_token)
+    } catch (error) {
+      setAuthError(authErrorMessage(error))
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  function logout(): void {
+    clearSession()
+    setAuthError(null)
+  }
 
   async function runTick(): Promise<void> {
+    if (!token) return
+
     setBusy(true)
     try {
-      const snapshot = await request<Snapshot>('/api/ems/simulation/tick', {
-        method: 'POST',
-      })
+      const snapshot = await request<Snapshot>(
+        '/api/ems/simulation/tick',
+        { method: 'POST' },
+        token,
+      )
       setLastSnapshot(snapshot)
-      await loadDashboard()
+      await loadDashboard(token)
     } finally {
       setBusy(false)
     }
   }
 
   async function setStrategy(strategy: StrategyType): Promise<void> {
+    if (!token) return
+
     setBusy(true)
     try {
-      await request<Settings>('/api/ems/strategy', {
-        method: 'POST',
-        body: JSON.stringify({ strategy }),
-      })
-      await loadDashboard()
+      await request<Settings>(
+        '/api/ems/strategy',
+        {
+          method: 'POST',
+          body: JSON.stringify({ strategy }),
+        },
+        token,
+      )
+      await loadDashboard(token)
     } finally {
       setBusy(false)
     }
   }
 
   async function toggleDevice(device: Device): Promise<void> {
+    if (!token) return
+
     setBusy(true)
     try {
-      await request<Device>(`/api/ems/devices/${device.id}/toggle`, {
-        method: 'POST',
-      })
-      await loadDashboard()
+      await request<Device>(
+        `/api/ems/devices/${device.id}/toggle`,
+        { method: 'POST' },
+        token,
+      )
+      await loadDashboard(token)
     } finally {
       setBusy(false)
     }
   }
 
   async function updateDevicePower(device: Device, value: number): Promise<void> {
+    if (!token) return
+
     setDashboard((current) => {
       if (!current) return current
       return {
@@ -204,11 +441,110 @@ function App() {
         ),
       }
     })
-    await request<Device>(`/api/ems/devices/${device.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ current_power_kw: value, is_active: value > 0 }),
-    })
-    await loadDashboard()
+    await request<Device>(
+      `/api/ems/devices/${device.id}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ current_power_kw: value, is_active: value > 0 }),
+      },
+      token,
+    )
+    await loadDashboard(token)
+  }
+
+  if (!token || (!user && !checkingSession)) {
+    return (
+      <main className="app-shell auth-shell">
+        <section className="auth-panel" aria-label="Logowanie do Smart Home EMS">
+          <div className="auth-copy">
+            <p className="eyebrow">Smart Home EMS</p>
+            <h1>Twoj panel energii</h1>
+            <p>
+              Zaloguj sie albo utworz konto, a aplikacja przygotuje osobny zestaw
+              urzadzen, baterii, ustawien i historii dla Twojego uzytkownika.
+            </p>
+          </div>
+
+          <form className="auth-form" onSubmit={(event) => void handleAuthSubmit(event)}>
+            <div className="auth-tabs" role="tablist" aria-label="Tryb autoryzacji">
+              <button
+                type="button"
+                className={authMode === 'login' ? 'active' : ''}
+                onClick={() => switchAuthMode('login')}
+              >
+                Logowanie
+              </button>
+              <button
+                type="button"
+                className={authMode === 'register' ? 'active' : ''}
+                onClick={() => switchAuthMode('register')}
+              >
+                Rejestracja
+              </button>
+            </div>
+
+            <label>
+              Nazwa uzytkownika
+              <input
+                type="text"
+                value={authForm.username}
+                autoComplete="username"
+                minLength={3}
+                maxLength={64}
+                required
+                onChange={(event) => updateAuthField('username', event.currentTarget.value)}
+              />
+            </label>
+
+            {authMode === 'register' && (
+              <label>
+                Email
+                <input
+                  type="email"
+                  value={authForm.email}
+                  autoComplete="email"
+                  required
+                  onChange={(event) => updateAuthField('email', event.currentTarget.value)}
+                />
+              </label>
+            )}
+
+            <label>
+              Haslo
+              <input
+                type="password"
+                value={authForm.password}
+                autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
+                minLength={authMode === 'register' ? 8 : undefined}
+                required
+                onChange={(event) => updateAuthField('password', event.currentTarget.value)}
+              />
+            </label>
+
+            {authError && <p className="auth-error">{authError}</p>}
+
+            <button type="submit" className="auth-submit" disabled={authBusy}>
+              {authBusy
+                ? 'Przetwarzanie'
+                : authMode === 'register'
+                  ? 'Utworz konto'
+                  : 'Zaloguj'}
+            </button>
+          </form>
+        </section>
+      </main>
+    )
+  }
+
+  if (!user) {
+    return (
+      <main className="app-shell auth-shell">
+        <section className="auth-panel session-panel">
+          <p className="eyebrow">Smart Home EMS</p>
+          <h1>Sprawdzam sesje</h1>
+        </section>
+      </main>
+    )
   }
 
   return (
@@ -218,9 +554,21 @@ function App() {
           <p className="eyebrow">Smart Home EMS</p>
           <h1>Energy Control</h1>
         </div>
-        <div className={`connection ${status.toLowerCase()}`}>
-          <span />
-          {status}
+        <div className="topbar-actions">
+          <div className={`connection ${status.toLowerCase()}`}>
+            <span />
+            {status}
+          </div>
+          <div className="user-chip" title={user.email}>
+            <span>{user.username.slice(0, 1).toUpperCase()}</span>
+            <div>
+              <strong>{user.username}</strong>
+              <small>{user.role.toLowerCase()}</small>
+            </div>
+          </div>
+          <button type="button" className="ghost-button" onClick={logout}>
+            Wyloguj
+          </button>
         </div>
       </header>
 
