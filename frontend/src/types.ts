@@ -28,6 +28,7 @@ export type Settings = {
   active_strategy: StrategyType
   grid_buy_price: number
   grid_sell_price: number
+  battery_export_threshold_percentage: number
   location_name: string
   latitude: number
   longitude: number
@@ -36,6 +37,7 @@ export type Settings = {
 export type EnergyLog = {
   id: number
   timestamp: string
+  interval_seconds: number
   total_consumption_kwh: number
   total_production_kwh: number
   grid_bought_kwh: number
@@ -58,6 +60,7 @@ export type Dashboard = {
 }
 
 export type Snapshot = {
+  interval_seconds: number
   total_consumption_kwh: number
   total_production_kwh: number
   battery_soc_percentage: number

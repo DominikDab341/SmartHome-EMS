@@ -129,6 +129,11 @@ class SystemSettings(Base):
     )
     grid_buy_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)
     grid_sell_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.45)
+    battery_export_threshold_percentage: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=80.0,
+    )
     location_name: Mapped[str] = mapped_column(String(96), nullable=False, default="Warsaw")
     latitude: Mapped[float] = mapped_column(Float, nullable=False, default=52.2297)
     longitude: Mapped[float] = mapped_column(Float, nullable=False, default=21.0122)
@@ -151,6 +156,7 @@ class EnergyLog(Base):
         nullable=False,
         index=True,
     )
+    interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=1800)
     total_consumption_kwh: Mapped[float] = mapped_column(Float, nullable=False)
     total_production_kwh: Mapped[float] = mapped_column(Float, nullable=False)
     grid_bought_kwh: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

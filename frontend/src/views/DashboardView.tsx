@@ -1,4 +1,5 @@
 import { strategyDescriptions, strategyLabels } from '../constants/energy'
+import { SIMULATION_CYCLE_MINUTES } from '../config'
 import { formatKw, formatKwh, formatMoney } from '../lib/formatters'
 import type {
   Dashboard,
@@ -7,7 +8,9 @@ import type {
   StrategyType,
 } from '../types'
 import { EnergyChart } from '../components/EnergyChart'
+import { ExportThresholdControl } from '../components/ExportThresholdControl'
 import { Icon } from '../components/Icon'
+import { LocationControl } from '../components/LocationControl'
 
 type DashboardViewProps = {
   dashboard: Dashboard | null
@@ -17,8 +20,12 @@ type DashboardViewProps = {
   deviceStats: DeviceStats
   canManage: boolean
   busy: boolean
+  locationBusy: boolean
+  locationError: string | null
   onNavigateToDevices: () => void
   onStrategyChange: (strategy: StrategyType) => void
+  onExportThresholdChange: (value: number) => void
+  onLocationChange: (city: string) => void
 }
 
 export function DashboardView({
@@ -29,10 +36,20 @@ export function DashboardView({
   deviceStats,
   canManage,
   busy,
+  locationBusy,
+  locationError,
   onNavigateToDevices,
   onStrategyChange,
+  onExportThresholdChange,
+  onLocationChange,
 }: DashboardViewProps) {
   const latest = dashboard?.latest_log
+  const cycleSeconds = latest?.interval_seconds ?? SIMULATION_CYCLE_MINUTES * 60
+  const cycleMinutes = Math.round(cycleSeconds / 60)
+  const cycleBalance = latest ? latest.revenue - latest.cost : 0
+  const cyclesPerHour = 3600 / cycleSeconds
+  const hourlyBalance = cycleBalance * cyclesPerHour
+  const dailyBalance = hourlyBalance * 24
 
   return (
     <>
@@ -98,15 +115,25 @@ export function DashboardView({
           <div className="card-topline">
             <span className="card-icon wallet"><Icon name="wallet" /></span>
             <span className={`trend-badge ${latest && latest.revenue >= latest.cost ? 'positive' : ''}`}>
-              Bilans cyklu
+              Ostatni cykl · {cycleMinutes} min
             </span>
           </div>
           <div className="metric-copy">
-            <p>Wynik finansowy</p>
-            <h2>{latest ? formatMoney(latest.revenue - latest.cost) : '0.00 PLN'}</h2>
+            <p>Wynik ostatniego cyklu ({cycleMinutes} min)</p>
+            <h2>{formatMoney(cycleBalance)}</h2>
           </div>
-          <div className="metric-footer">
-            <span>Sprzedaż {latest ? formatMoney(latest.revenue) : '0.00 PLN'}</span>
+          <div
+            className="financial-projections"
+            title="Prognoza zakłada utrzymanie identycznego zużycia, produkcji i cen."
+          >
+            <span>
+              <small>Prognoza godzinna</small>
+              <strong>{formatMoney(hourlyBalance)}</strong>
+            </span>
+            <span>
+              <small>Prognoza dzienna</small>
+              <strong>{formatMoney(dailyBalance)}</strong>
+            </span>
           </div>
         </article>
       </section>
@@ -142,7 +169,26 @@ export function DashboardView({
               <span><small>Cena zakupu</small>{dashboard ? formatMoney(dashboard.settings.grid_buy_price) : '--'}</span>
               <span><small>Cena sprzedaży</small>{dashboard ? formatMoney(dashboard.settings.grid_sell_price) : '--'}</span>
               <span><small>Aktywny tryb</small>{dashboard ? strategyLabels[dashboard.settings.active_strategy] : '--'}</span>
+              <span><small>Maks. rozładowanie</small>{dashboard ? formatKw(dashboard.battery.max_discharge_rate_kw) : '--'}</span>
             </div>
+            {dashboard && (
+              <LocationControl
+                key={dashboard.settings.location_name}
+                currentLocation={dashboard.settings.location_name}
+                disabled={!canManage}
+                busy={locationBusy}
+                error={locationError}
+                onSubmit={onLocationChange}
+              />
+            )}
+            {dashboard?.settings.active_strategy === 'maximize_profit' && (
+              <ExportThresholdControl
+                key={dashboard.settings.battery_export_threshold_percentage}
+                value={dashboard.settings.battery_export_threshold_percentage}
+                disabled={!canManage || busy}
+                onChange={onExportThresholdChange}
+              />
+            )}
             {lastSnapshot && (
               <div className="decision-insight">
                 <span className="card-icon"><Icon name="bolt" size={17} /></span>

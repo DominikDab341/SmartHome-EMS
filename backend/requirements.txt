@@ -11,3 +11,5 @@ PyJWT
 python-multipart
 email-validator
 watchfiles
+pytest
+pytest-asyncio

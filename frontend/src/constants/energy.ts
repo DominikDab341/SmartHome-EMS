@@ -1,15 +1,15 @@
 import type { AppView, StrategyType } from '../types'
 
 export const strategyLabels: Record<StrategyType, string> = {
-  maximize_profit: 'Maksymalny zysk',
+  maximize_profit: 'Pełen zakup z sieci',
   eco_friendly: 'Tryb ekologiczny',
   battery_life: 'Ochrona baterii',
 }
 
 export const strategyDescriptions: Record<StrategyType, string> = {
-  maximize_profit: 'Kupuj i sprzedawaj energię wtedy, gdy jest to najbardziej opłacalne.',
-  eco_friendly: 'W pierwszej kolejności wykorzystuj energię wyprodukowaną na miejscu.',
-  battery_life: 'Ograniczaj głębokie cykle, aby wydłużyć żywotność magazynu energii.',
+  maximize_profit: 'Sieć pokrywa zużycie, a fotowoltaika ładuje baterię do ustawionego progu eksportu.',
+  eco_friendly: 'Bateria pokrywa całe możliwe zapotrzebowanie, także poniżej rezerwy 20%.',
+  battery_life: 'Bateria pracuje pełną dozwoloną mocą, ale zatrzymuje się dokładnie na 20%.',
 }
 
 export const pageMeta: Record<

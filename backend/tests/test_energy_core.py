@@ -1,10 +1,29 @@
-from database.models import StrategyType
+from types import SimpleNamespace
+
+import pytest
+from pydantic import ValidationError
+
+from api.schemas import DeviceCreate
+from core.devices import SimulatedDevice
+from core.geocoding import (
+    GeocodingAdapter,
+    GeocodingServiceError,
+    LocationNotFoundError,
+)
+from core.manager import EnergyManager
+from core.weather import WeatherAdapter
+from database.models import DeviceType, StrategyType
 
 from core.domain import BatteryState, HomeState, PricingState, WeatherCondition
 from core.strategies import strategy_for
 
 
-def _state(consumption: float, production: float, charge: float = 5.0) -> HomeState:
+def _state(
+    consumption: float,
+    production: float,
+    charge: float = 5.0,
+    export_threshold: float = 80.0,
+) -> HomeState:
     return HomeState(
         consumption_kwh=consumption,
         production_kwh=production,
@@ -18,25 +37,195 @@ def _state(consumption: float, production: float, charge: float = 5.0) -> HomeSt
         pricing=PricingState(grid_buy_price=0.95, grid_sell_price=0.45),
         weather=WeatherCondition(cloud_cover=20.0, solar_factor=0.83, temperature_c=22.0),
         interval_hours=1.0,
+        battery_export_threshold_percentage=export_threshold,
     )
 
 
-def test_eco_strategy_uses_battery_before_grid() -> None:
-    decision = strategy_for(StrategyType.ECO_FRIENDLY).calculate_flow(_state(4.0, 1.0))
+def test_eco_strategy_uses_battery_below_safety_reserve() -> None:
+    decision = strategy_for(StrategyType.ECO_FRIENDLY).calculate_flow(
+        _state(2.0, 1.0, charge=2.0)
+    )
 
-    assert decision.battery_discharged_kwh > 0
+    assert decision.battery_discharged_kwh == 1.0
     assert decision.grid_bought_kwh == 0
 
 
-def test_profit_strategy_sells_surplus() -> None:
-    decision = strategy_for(StrategyType.MAXIMIZE_PROFIT).calculate_flow(_state(1.0, 4.0, 8.0))
+def test_eco_strategy_uses_full_configured_discharge_power() -> None:
+    decision = strategy_for(StrategyType.ECO_FRIENDLY).calculate_flow(_state(4.0, 1.0))
 
-    assert decision.grid_sold_kwh > 0
+    assert decision.battery_discharged_kwh == 3.0
+    assert decision.grid_bought_kwh == 0
+
+
+def test_grid_purchase_strategy_buys_consumption_and_charges_to_threshold() -> None:
+    decision = strategy_for(StrategyType.MAXIMIZE_PROFIT).calculate_flow(
+        _state(4.0, 4.0, charge=5.0, export_threshold=80.0)
+    )
+
+    assert decision.grid_bought_kwh == 4.0
+    assert decision.grid_sold_kwh == 1.0
+    assert decision.battery_charged_kwh == 3.0
+    assert decision.battery_discharged_kwh == 0
+    assert decision.cost > 0
     assert decision.revenue > 0
 
 
-def test_battery_life_strategy_keeps_conservative_reserve() -> None:
-    decision = strategy_for(StrategyType.BATTERY_LIFE).calculate_flow(_state(8.0, 0.0, 3.6))
+def test_grid_purchase_strategy_exports_everything_above_threshold() -> None:
+    decision = strategy_for(StrategyType.MAXIMIZE_PROFIT).calculate_flow(
+        _state(2.0, 3.0, charge=8.0, export_threshold=80.0)
+    )
 
-    assert decision.battery_discharged_kwh <= 0.6
-    assert decision.grid_bought_kwh > 0
+    assert decision.grid_bought_kwh == 2.0
+    assert decision.grid_sold_kwh == 3.0
+    assert decision.battery_charged_kwh == 0
+
+
+def test_battery_life_strategy_stops_at_twenty_percent() -> None:
+    decision = strategy_for(StrategyType.BATTERY_LIFE).calculate_flow(
+        _state(3.0, 0.0, charge=2.0)
+    )
+
+    assert decision.battery_discharged_kwh == 0
+    assert decision.grid_bought_kwh == 3.0
+
+
+def test_battery_life_strategy_uses_full_power_above_reserve() -> None:
+    decision = strategy_for(StrategyType.BATTERY_LIFE).calculate_flow(
+        _state(5.0, 0.0, charge=6.0)
+    )
+
+    assert decision.battery_discharged_kwh == 3.0
+    assert decision.grid_bought_kwh == 2.0
+
+
+def test_all_strategies_conserve_energy_and_respect_battery_limits() -> None:
+    for strategy_type in StrategyType:
+        for consumption in (0.0, 0.5, 3.0, 12.0):
+            for production in (0.0, 0.5, 3.0, 12.0):
+                for charge in (0.0, 2.0, 5.0, 10.0):
+                    for interval_hours in (1 / 60, 0.5, 1.0):
+                        state = _state(consumption, production, charge)
+                        state.interval_hours = interval_hours
+                        decision = strategy_for(strategy_type).calculate_flow(state)
+
+                        EnergyManager._validate_decision(state, decision)
+
+                        final_charge = (
+                            charge
+                            + decision.battery_charged_kwh
+                            - decision.battery_discharged_kwh
+                        )
+                        assert 0 <= final_charge <= state.battery.total_capacity_kwh
+
+
+def test_battery_protection_never_crosses_reserve() -> None:
+    state = _state(20.0, 0.0, charge=2.01)
+    decision = strategy_for(StrategyType.BATTERY_LIFE).calculate_flow(state)
+
+    final_charge = state.battery.current_charge_kwh - decision.battery_discharged_kwh
+    assert final_charge == pytest.approx(state.battery.min_safe_charge_kwh)
+
+
+def test_solar_factor_is_zero_at_night() -> None:
+    assert WeatherAdapter._solar_factor(0.0, is_day=False) == 0.0
+    assert WeatherAdapter._solar_factor(100.0, is_day=False) == 0.0
+
+
+def test_production_is_zero_when_solar_factor_is_zero() -> None:
+    devices = [
+        SimpleNamespace(
+            type=DeviceType.SOLAR,
+            is_active=True,
+            max_power_kw=10.0,
+        )
+    ]
+
+    assert EnergyManager._calculate_production(devices, 0.0, 0.5) == 0.0
+
+
+def test_consumption_ignores_inactive_and_solar_devices() -> None:
+    devices = [
+        SimpleNamespace(
+            type=DeviceType.APPLIANCE,
+            is_active=True,
+            current_power_kw=2.0,
+        ),
+        SimpleNamespace(
+            type=DeviceType.APPLIANCE,
+            is_active=False,
+            current_power_kw=5.0,
+        ),
+        SimpleNamespace(
+            type=DeviceType.SOLAR,
+            is_active=True,
+            current_power_kw=10.0,
+        ),
+    ]
+
+    assert EnergyManager._calculate_consumption(devices, 0.5) == 1.0
+
+
+def test_device_create_rejects_current_power_above_maximum() -> None:
+    with pytest.raises(ValidationError):
+        DeviceCreate(
+            name="Invalid heater",
+            type=DeviceType.APPLIANCE,
+            max_power_kw=1.0,
+            current_power_kw=2.0,
+        )
+
+
+def test_turning_device_off_preserves_configured_power() -> None:
+    device = SimulatedDevice(
+        name="Heat pump",
+        type=DeviceType.APPLIANCE,
+        max_power_kw=3.0,
+        current_power_kw=2.0,
+    )
+
+    device.turn_off()
+    assert device.is_active is False
+    assert device.current_power_kw == 2.0
+
+    device.turn_on()
+    assert device.is_active is True
+    assert device.current_power_kw == 2.0
+
+
+def test_geocoding_payload_is_converted_to_location() -> None:
+    location = GeocodingAdapter._location_from_payload(
+        {
+            "results": [
+                {
+                    "name": "Gdańsk",
+                    "country": "Polska",
+                    "latitude": 54.35227,
+                    "longitude": 18.64912,
+                }
+            ]
+        }
+    )
+
+    assert location.name == "Gdańsk, Polska"
+    assert location.latitude == pytest.approx(54.35227)
+    assert location.longitude == pytest.approx(18.64912)
+
+
+def test_geocoding_rejects_empty_results() -> None:
+    with pytest.raises(LocationNotFoundError):
+        GeocodingAdapter._location_from_payload({"results": []})
+
+
+def test_geocoding_rejects_invalid_coordinates() -> None:
+    with pytest.raises(GeocodingServiceError):
+        GeocodingAdapter._location_from_payload(
+            {
+                "results": [
+                    {
+                        "name": "Invalid",
+                        "latitude": 200,
+                        "longitude": 20,
+                    }
+                ]
+            }
+        )

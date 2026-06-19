@@ -69,6 +69,7 @@ class HomeState:
     pricing: PricingState
     weather: WeatherCondition
     interval_hours: float
+    battery_export_threshold_percentage: float = 80.0
 
 
 @dataclass(slots=True)
@@ -86,6 +87,7 @@ class EnergyDecision:
 @dataclass(slots=True)
 class EnergySnapshot:
     timestamp: datetime
+    interval_seconds: int
     total_consumption_kwh: float
     total_production_kwh: float
     battery_charge_kwh: float

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from database.models import DeviceType, StrategyType, UserRole
 
@@ -41,6 +41,15 @@ class DeviceCreate(BaseModel):
     max_power_kw: float = Field(gt=0, le=25)
     current_power_kw: float = Field(default=0.0, ge=0, le=25)
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_power_limit(self) -> "DeviceCreate":
+        if (
+            self.type == DeviceType.APPLIANCE
+            and self.current_power_kw > self.max_power_kw
+        ):
+            raise ValueError("Current power cannot exceed maximum power")
+        return self
 
 
 class DeviceUpdate(BaseModel):
@@ -86,6 +95,7 @@ class SystemSettingsPublic(BaseModel):
     active_strategy: StrategyType
     grid_buy_price: float
     grid_sell_price: float
+    battery_export_threshold_percentage: float
     location_name: str
     latitude: float
     longitude: float
@@ -97,9 +107,26 @@ class SystemSettingsUpdate(BaseModel):
     active_strategy: StrategyType | None = None
     grid_buy_price: float | None = Field(default=None, ge=0)
     grid_sell_price: float | None = Field(default=None, ge=0)
+    battery_export_threshold_percentage: float | None = Field(
+        default=None,
+        ge=20,
+        le=100,
+    )
     location_name: str | None = Field(default=None, min_length=2, max_length=96)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
+
+
+class LocationUpdateRequest(BaseModel):
+    city: str = Field(min_length=2, max_length=96)
+
+    @field_validator("city")
+    @classmethod
+    def normalize_city(cls, value: str) -> str:
+        city = " ".join(value.split())
+        if len(city) < 2:
+            raise ValueError("City name must contain at least two characters")
+        return city
 
 
 class StrategyRequest(BaseModel):
@@ -129,6 +156,7 @@ class EnergyDecisionPublic(BaseModel):
 
 class EnergySnapshotPublic(BaseModel):
     timestamp: datetime
+    interval_seconds: int
     total_consumption_kwh: float
     total_production_kwh: float
     battery_charge_kwh: float
@@ -143,6 +171,7 @@ class EnergySnapshotPublic(BaseModel):
 class EnergyLogPublic(BaseModel):
     id: int
     timestamp: datetime
+    interval_seconds: int
     total_consumption_kwh: float
     total_production_kwh: float
     grid_bought_kwh: float

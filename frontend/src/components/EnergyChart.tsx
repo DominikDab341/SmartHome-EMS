@@ -1,5 +1,10 @@
 import { strategyLabels } from '../constants/energy'
-import { formatDateTime, formatKwh } from '../lib/formatters'
+import {
+  formatDateTime,
+  formatDuration,
+  formatKw,
+  formatKwh,
+} from '../lib/formatters'
 import type { Dashboard } from '../types'
 import { Icon } from './Icon'
 
@@ -10,11 +15,13 @@ type EnergyChartProps = {
 
 export function EnergyChart({ dashboard, expanded = false }: EnergyChartProps) {
   const latest = dashboard?.latest_log
+  const averagePowerKw = (energyKwh: number, intervalSeconds: number) =>
+    intervalSeconds > 0 ? energyKwh / (intervalSeconds / 3600) : 0
   const maxChartValue = Math.max(
     0.01,
     ...(dashboard?.logs.flatMap((log) => [
-      log.total_consumption_kwh,
-      log.total_production_kwh,
+      averagePowerKw(log.total_consumption_kwh, log.interval_seconds),
+      averagePowerKw(log.total_production_kwh, log.interval_seconds),
     ]) ?? [0.01]),
   )
 
@@ -23,7 +30,7 @@ export function EnergyChart({ dashboard, expanded = false }: EnergyChartProps) {
       <div className="section-heading">
         <div>
           <p className="eyebrow">Historia pomiarów</p>
-          <h2>Zużycie i produkcja energii</h2>
+          <h2>Średnia moc zużycia i produkcji</h2>
           <p className="section-description">
             {dashboard?.logs.length
               ? `${dashboard.logs.length} ostatnich cykli symulacji`
@@ -41,15 +48,19 @@ export function EnergyChart({ dashboard, expanded = false }: EnergyChartProps) {
             <div
               className="chart-column"
               key={log.id}
-              title={`${formatDateTime(log.timestamp)} · zużycie ${formatKwh(log.total_consumption_kwh)} · produkcja ${formatKwh(log.total_production_kwh)}`}
+              title={`${formatDateTime(log.timestamp)} · cykl ${formatDuration(log.interval_seconds)} · zużycie ${formatKw(averagePowerKw(log.total_consumption_kwh, log.interval_seconds))} · produkcja ${formatKw(averagePowerKw(log.total_production_kwh, log.interval_seconds))}`}
             >
               <span
                 className="bar consume"
-                style={{ height: `${(log.total_consumption_kwh / maxChartValue) * 100}%` }}
+                style={{
+                  height: `${(averagePowerKw(log.total_consumption_kwh, log.interval_seconds) / maxChartValue) * 100}%`,
+                }}
               />
               <span
                 className="bar produce"
-                style={{ height: `${(log.total_production_kwh / maxChartValue) * 100}%` }}
+                style={{
+                  height: `${(averagePowerKw(log.total_production_kwh, log.interval_seconds) / maxChartValue) * 100}%`,
+                }}
               />
               {(index === 0 || index === dashboard.logs.length - 1) && (
                 <small>
@@ -90,6 +101,7 @@ export function EnergyChart({ dashboard, expanded = false }: EnergyChartProps) {
               <span>Zużycie</span>
               <span>Produkcja</span>
               <span>Bilans</span>
+              <span>Cykl</span>
               <span>Strategia</span>
             </div>
             {[...dashboard.logs].reverse().map((log) => (
@@ -101,6 +113,7 @@ export function EnergyChart({ dashboard, expanded = false }: EnergyChartProps) {
                   {log.total_production_kwh >= log.total_consumption_kwh ? '+' : ''}
                   {formatKwh(log.total_production_kwh - log.total_consumption_kwh)}
                 </span>
+                <span>{formatDuration(log.interval_seconds)}</span>
                 <span>{strategyLabels[log.strategy]}</span>
               </div>
             ))}

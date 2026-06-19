@@ -21,6 +21,14 @@ export function formatDateTime(value: string): string {
   }).format(new Date(value))
 }
 
+export function formatDuration(seconds: number): string {
+  if (seconds % 3600 === 0) {
+    const hours = seconds / 3600
+    return `${hours} godz.`
+  }
+  return `${Math.round(seconds / 60)} min`
+}
+
 export function roleLabel(role: UserProfile['role']): string {
   if (role === 'OWNER') return 'Właściciel'
   if (role === 'ADMIN') return 'Administrator'

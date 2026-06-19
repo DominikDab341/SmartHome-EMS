@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     WEATHER_LATITUDE: float = 52.2297
     WEATHER_LONGITUDE: float = 21.0122
-    SIMULATION_INTERVAL_SECONDS: int = 60
+    SIMULATION_INTERVAL_SECONDS: int = Field(default=1800, gt=0)
 
     @property
     def database_url(self) -> str:

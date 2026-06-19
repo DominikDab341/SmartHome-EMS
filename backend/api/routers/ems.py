@@ -14,11 +14,18 @@ from api.schemas import (
     DeviceUpdate,
     EnergyLogPublic,
     EnergySnapshotPublic,
+    LocationUpdateRequest,
     StrategyRequest,
     SystemSettingsPublic,
     SystemSettingsUpdate,
 )
+from core.geocoding import (
+    GeocodingServiceError,
+    LocationNotFoundError,
+    geocoding_adapter,
+)
 from core.manager import energy_manager
+from database.config import settings as app_settings
 from database.database import get_db
 from database.models import Battery, Device, DeviceType, EnergyLog, SystemSettings, User
 
@@ -56,12 +63,15 @@ async def get_dashboard(
         .all()
     )
     battery = await _get_battery(db, house_id)
-    settings = await _get_settings(db, house_id)
+    system_settings = await _get_settings(db, house_id)
     logs = list(
         (
             await db.execute(
                 select(EnergyLog)
-                .where(EnergyLog.user_id == house_id)
+                .where(
+                    EnergyLog.user_id == house_id,
+                    EnergyLog.interval_seconds == app_settings.SIMULATION_INTERVAL_SECONDS,
+                )
                 .order_by(desc(EnergyLog.timestamp))
                 .limit(24)
             )
@@ -72,7 +82,7 @@ async def get_dashboard(
     return DashboardPublic(
         devices=[DevicePublic.model_validate(device) for device in devices],
         battery=BatteryPublic.model_validate(battery),
-        settings=SystemSettingsPublic.model_validate(settings),
+        settings=SystemSettingsPublic.model_validate(system_settings),
         latest_log=EnergyLogPublic.model_validate(logs[0]) if logs else None,
         logs=[EnergyLogPublic.model_validate(log) for log in reversed(logs)],
     )
@@ -123,12 +133,20 @@ async def update_device(
     current_owner: User = Depends(get_current_owner),
 ) -> DevicePublic:
     device = await _get_device(db, device_id, house_scope_id(current_owner))
-    for key, value in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    next_type = updates.get("type", device.type)
+    next_max_power = updates.get("max_power_kw", device.max_power_kw)
+    next_current_power = updates.get("current_power_kw", device.current_power_kw)
+    if next_type == DeviceType.SOLAR:
+        next_current_power = 0.0
+        updates["current_power_kw"] = 0.0
+    if next_current_power > next_max_power:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Current power cannot exceed maximum power",
+        )
+    for key, value in updates.items():
         setattr(device, key, value)
-    if device.type == DeviceType.SOLAR:
-        device.current_power_kw = 0.0
-    if device.current_power_kw > device.max_power_kw:
-        device.current_power_kw = device.max_power_kw
     await db.commit()
     await db.refresh(device)
     return DevicePublic.model_validate(device)
@@ -142,9 +160,9 @@ async def toggle_device(
 ) -> DevicePublic:
     device = await _get_device(db, device_id, house_scope_id(current_owner))
     device.is_active = not device.is_active
-    if not device.is_active:
+    if device.type == DeviceType.SOLAR:
         device.current_power_kw = 0.0
-    elif device.current_power_kw == 0:
+    elif device.is_active and device.current_power_kw == 0:
         device.current_power_kw = min(device.max_power_kw, max(0.1, device.max_power_kw * 0.65))
     await db.commit()
     await db.refresh(device)
@@ -211,6 +229,34 @@ async def update_settings(
     return SystemSettingsPublic.model_validate(settings)
 
 
+@router.post("/settings/location", response_model=SystemSettingsPublic)
+async def update_location(
+    body: LocationUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_owner: User = Depends(get_current_owner),
+) -> SystemSettingsPublic:
+    system_settings = await _get_settings(db, house_scope_id(current_owner))
+    try:
+        location = await geocoding_adapter.resolve(body.city)
+    except LocationNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Nie znaleziono podanego miasta.",
+        ) from exc
+    except GeocodingServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Nie udało się pobrać danych lokalizacji. Spróbuj ponownie.",
+        ) from exc
+
+    system_settings.location_name = location.name
+    system_settings.latitude = location.latitude
+    system_settings.longitude = location.longitude
+    await db.commit()
+    await db.refresh(system_settings)
+    return SystemSettingsPublic.model_validate(system_settings)
+
+
 @router.post("/strategy", response_model=SystemSettingsPublic)
 async def set_strategy(
     body: StrategyRequest,
@@ -219,7 +265,6 @@ async def set_strategy(
 ) -> SystemSettingsPublic:
     settings = await _get_settings(db, house_scope_id(current_owner))
     settings.active_strategy = body.strategy
-    energy_manager.set_strategy(body.strategy)
     await db.commit()
     await db.refresh(settings)
     return SystemSettingsPublic.model_validate(settings)
@@ -237,7 +282,10 @@ async def list_logs(
         (
             await db.execute(
                 select(EnergyLog)
-                .where(EnergyLog.user_id == house_id)
+                .where(
+                    EnergyLog.user_id == house_id,
+                    EnergyLog.interval_seconds == app_settings.SIMULATION_INTERVAL_SECONDS,
+                )
                 .order_by(desc(EnergyLog.timestamp))
                 .limit(bounded_limit)
             )
@@ -253,7 +301,11 @@ async def run_simulation_tick(
     db: AsyncSession = Depends(get_db),
     current_owner: User = Depends(get_current_owner),
 ) -> EnergySnapshotPublic:
-    snapshot = await energy_manager.run_cycle(db, house_scope_id(current_owner))
+    snapshot = await energy_manager.run_cycle(
+        db,
+        house_scope_id(current_owner),
+        app_settings.SIMULATION_INTERVAL_SECONDS,
+    )
     return EnergySnapshotPublic.model_validate(snapshot)
 
 

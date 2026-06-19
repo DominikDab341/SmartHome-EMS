@@ -40,11 +40,12 @@ class SimulatedDevice:
 
     def turn_off(self) -> None:
         self.is_active = False
-        self.current_power_kw = 0.0
         self.notify()
 
     def set_power(self, power_kw: float) -> None:
         self.current_power_kw = max(0.0, min(power_kw, self.max_power_kw))
+        if self.type == DeviceType.APPLIANCE:
+            self.is_active = self.current_power_kw > 0
         self.notify()
 
     def to_state(self) -> DeviceState:

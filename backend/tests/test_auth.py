@@ -1,3 +1,4 @@
+import pytest
 import pytest_asyncio
 
 from httpx import AsyncClient, ASGITransport
@@ -10,7 +11,9 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from api.main import app
+from api.routers import ems
 from api.security import hash_password
+from core.geocoding import LocationMatch
 from database.config import settings
 from database.database import get_db
 from database.models import User, UserRole
@@ -139,6 +142,50 @@ async def test_protected_endpoint_with_valid_token_returns_200():
     body = response.json()
     assert body["username"] == TEST_USERNAME
     assert "hashed_password" not in body  # passwords must never leak
+
+
+async def test_dashboard_with_valid_token_returns_seeded_simulation_state():
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+
+        response = await client.get(
+            "/api/ems/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["battery"]["total_capacity_kwh"] > 0
+    assert body["settings"]["active_strategy"]
+    assert isinstance(body["devices"], list)
+
+
+async def test_owner_can_update_weather_location_by_city(monkeypatch):
+    async def fake_resolve(city: str) -> LocationMatch:
+        assert city == "Gdańsk"
+        return LocationMatch(
+            name="Gdańsk, Polska",
+            latitude=54.35227,
+            longitude=18.64912,
+        )
+
+    monkeypatch.setattr(ems.geocoding_adapter, "resolve", fake_resolve)
+
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+        response = await client.post(
+            "/api/ems/settings/location",
+            json={"city": "  Gdańsk  "},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["location_name"] == "Gdańsk, Polska"
+    assert body["latitude"] == pytest.approx(54.35227)
+    assert body["longitude"] == pytest.approx(18.64912)
 
 
 #Registration tests

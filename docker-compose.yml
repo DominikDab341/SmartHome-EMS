@@ -16,8 +16,8 @@ services:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://smarthome:password@db:5432/smarthome_db
-      - SECRET_KEY=dev-compose-secret
-      - SIMULATION_INTERVAL_SECONDS=60
+      - SECRET_KEY=dev-compose-secret-change-me-32-bytes
+      - SIMULATION_INTERVAL_SECONDS=1800
       - WATCHFILES_FORCE_POLLING=true
     depends_on:
       - db

@@ -25,13 +25,17 @@ async def _simulation_loop() -> None:
         try:
             async with SessionLocal() as db:
                 db_users = list((await db.execute(select(User))).scalars().all())
-                for house_id in _house_ids_for_users(db_users):
-                    await energy_manager.run_cycle(
-                        db,
-                        house_id,
-                        settings.SIMULATION_INTERVAL_SECONDS,
-                    )
-        except (SQLAlchemyError, RuntimeError):
+            for house_id in _house_ids_for_users(db_users):
+                try:
+                    async with SessionLocal() as db:
+                        await energy_manager.run_cycle(
+                            db,
+                            house_id,
+                            settings.SIMULATION_INTERVAL_SECONDS,
+                        )
+                except (SQLAlchemyError, RuntimeError, ValueError):
+                    continue
+        except SQLAlchemyError:
             continue
 
 

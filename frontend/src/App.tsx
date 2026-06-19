@@ -53,6 +53,9 @@ function App() {
     storedToken ? 'Connecting' : 'Offline',
   )
   const [busy, setBusy] = useState(false)
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const [locationBusy, setLocationBusy] = useState(false)
+  const [locationError, setLocationError] = useState<string | null>(null)
 
   const [deviceForm, setDeviceForm] = useState<DeviceForm>(emptyDeviceForm)
   const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null)
@@ -130,6 +133,9 @@ function App() {
     setPendingDeleteResidentId(null)
     setResidentError(null)
     setStatus('Offline')
+    setSettingsBusy(false)
+    setLocationBusy(false)
+    setLocationError(null)
     setActiveView('dashboard')
     setMobileNavigationOpen(false)
   }, [])
@@ -551,6 +557,70 @@ function App() {
     }
   }
 
+  async function setBatteryExportThreshold(value: number): Promise<void> {
+    if (!token || !canManage) return
+
+    setSettingsBusy(true)
+    setDashboard((current) =>
+      current
+        ? {
+            ...current,
+            settings: {
+              ...current.settings,
+              battery_export_threshold_percentage: value,
+            },
+          }
+        : current,
+    )
+
+    try {
+      const settings = await request<Settings>(
+        '/api/ems/settings',
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            battery_export_threshold_percentage: value,
+          }),
+        },
+        token,
+      )
+      setDashboard((current) => (current ? { ...current, settings } : current))
+    } catch {
+      await loadDashboard(token)
+    } finally {
+      setSettingsBusy(false)
+    }
+  }
+
+  async function setWeatherLocation(city: string): Promise<void> {
+    if (!token || !canManage) return
+
+    setLocationBusy(true)
+    setLocationError(null)
+    try {
+      const settings = await request<Settings>(
+        '/api/ems/settings/location',
+        {
+          method: 'POST',
+          body: JSON.stringify({ city }),
+        },
+        token,
+      )
+      setDashboard((current) => (current ? { ...current, settings } : current))
+      setLastSnapshot(null)
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        setLocationError('Nie znaleziono takiego miasta. Sprawdź nazwę i spróbuj ponownie.')
+      } else if (error instanceof ApiError && error.status === 503) {
+        setLocationError('Usługa lokalizacji jest chwilowo niedostępna. Spróbuj ponownie.')
+      } else {
+        setLocationError('Nie udało się zmienić miasta.')
+      }
+    } finally {
+      setLocationBusy(false)
+    }
+  }
+
   if (!token || (!user && !checkingSession)) {
     return (
       <AuthScreen
@@ -590,7 +660,7 @@ function App() {
           username={user.username}
           status={status}
           canManage={canManage}
-          busy={busy}
+          busy={busy || settingsBusy}
           onOpenMobile={() => setMobileNavigationOpen(true)}
           onRunTick={() => void runTick()}
         />
@@ -603,9 +673,13 @@ function App() {
             solarCapacity={solarCapacity}
             deviceStats={deviceStats}
             canManage={canManage}
-            busy={busy}
+            busy={busy || settingsBusy}
+            locationBusy={locationBusy}
+            locationError={locationError}
             onNavigateToDevices={() => navigateTo('devices')}
             onStrategyChange={(strategy) => void setStrategy(strategy)}
+            onExportThresholdChange={(value) => void setBatteryExportThreshold(value)}
+            onLocationChange={(city) => void setWeatherLocation(city)}
           />
         )}
 

@@ -1,4 +1,5 @@
 import { pageMeta } from '../constants/energy'
+import { SIMULATION_CYCLE_MINUTES } from '../config'
 import type { AppView, ConnectionStatus } from '../types'
 import { Icon } from './Icon'
 
@@ -49,7 +50,7 @@ export function AppHeader({
         {canManage && (
           <button type="button" className="primary-action" onClick={onRunTick} disabled={busy}>
             <Icon name="play" size={18} />
-            {busy ? 'Przeliczam…' : 'Uruchom symulację'}
+            {busy ? 'Przeliczam…' : `Symuluj ${SIMULATION_CYCLE_MINUTES} minut`}
           </button>
         )}
       </div>
