@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import { formatKw } from '../lib/formatters'
 import type { Device } from '../types'
 import { Icon } from './Icon'
@@ -31,11 +32,17 @@ export function DeviceCard({
   onConfirmDelete,
   onCancelDelete,
 }: DeviceCardProps) {
+  const powerStep = device.max_power_kw <= 1 ? 0.01 : 0.1
+  const formatDevicePower = (value: number) =>
+    `${value.toFixed(device.max_power_kw <= 1 ? 2 : 1)} kW`
   const utilization = device.max_power_kw
     ? Math.min((device.current_power_kw / device.max_power_kw) * 100, 100)
     : 0
   const displayedUtilization =
     device.type === 'solar' ? (device.is_active ? 100 : 0) : utilization
+  const rangeStyle = {
+    '--device-utilization': `${utilization}%`,
+  } as CSSProperties
 
   return (
     <article
@@ -57,32 +64,37 @@ export function DeviceCard({
         </div>
         <span className="device-card-meta">
           {device.type === 'solar'
-            ? `Instalacja PV · ${formatKw(device.max_power_kw)}`
-            : `Urządzenie · ${formatKw(device.current_power_kw)} z ${formatKw(device.max_power_kw)}`}
+            ? `Źródło wytwórcze (PV) · ${formatKw(device.max_power_kw)}`
+            : `Urządzenie · ${formatDevicePower(device.current_power_kw)} z ${formatDevicePower(device.max_power_kw)}`}
         </span>
-        <div
-          className="device-progress"
-          aria-label={`Wykorzystanie ${displayedUtilization.toFixed(0)}%`}
-        >
-          <span
-            className={device.type === 'solar' ? 'solar' : ''}
-            style={{ width: `${displayedUtilization}%` }}
-          />
-        </div>
+        {device.type === 'appliance' ? (
+          <>
+            <div className="device-progress-label">
+              <span>Aktualne zużycie</span>
+              <strong>{utilization.toFixed(0)}%</strong>
+            </div>
+            <input
+              aria-label={`Aktualne zużycie: ${device.name}`}
+              className="device-range"
+              type="range"
+              min="0"
+              max={device.max_power_kw}
+              step={powerStep}
+              value={device.current_power_kw}
+              style={rangeStyle}
+              disabled={!canManage || busy || deviceBusy}
+              onChange={(event) => onPowerChange(device, Number(event.currentTarget.value))}
+            />
+          </>
+        ) : (
+          <div
+            className="device-progress solar"
+            aria-label={`Aktywność źródła ${displayedUtilization.toFixed(0)}%`}
+          >
+            <span style={{ width: `${displayedUtilization}%` }} />
+          </div>
+        )}
       </div>
-      {device.type === 'appliance' && (
-        <input
-          aria-label={`${device.name} power`}
-          className="device-range"
-          type="range"
-          min="0"
-          max={device.max_power_kw}
-          step="0.1"
-          value={device.current_power_kw}
-          disabled={!canManage || busy || deviceBusy}
-          onChange={(event) => onPowerChange(device, Number(event.currentTarget.value))}
-        />
-      )}
       <button
         type="button"
         className={device.is_active ? 'switch active' : 'switch'}

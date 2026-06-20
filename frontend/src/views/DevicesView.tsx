@@ -77,13 +77,13 @@ export function DevicesView({
               <p className="eyebrow">Infrastruktura domu</p>
               <h2>{deviceStats.active} z {deviceStats.total} urządzeń aktywnych</h2>
               <p className="section-description">
-                Zmieniaj moc odbiorników, wyłączaj sprzęty i zarządzaj instalacją PV.
+                Zmieniaj moc odbiorników, wyłączaj sprzęty i zarządzaj źródłami wytwórczymi.
               </p>
             </div>
             <div className="device-summary">
               <span>{deviceStats.total} łącznie</span>
               <span>{deviceStats.appliances} odbiorników</span>
-              <span>{deviceStats.solar} instalacji PV</span>
+              <span>{deviceStats.solar} źródeł wytwórczych</span>
             </div>
           </div>
 
@@ -138,7 +138,7 @@ export function DevicesView({
                       onClick={() => onFieldChange('type', 'solar')}
                       disabled={deviceBusy || !devicePanelReady}
                     >
-                      Fotowoltaika
+                      Źródło wytwórcze
                     </button>
                   </div>
                 </div>
@@ -232,11 +232,11 @@ export function DevicesView({
               </div>
             </section>
 
-            <section className="device-group" aria-label="PV devices">
+            <section className="device-group" aria-label="Źródła wytwórcze">
               <div className="device-group-heading">
                 <div>
-                  <p className="eyebrow">Produkcja</p>
-                  <h3>Instalacje fotowoltaiczne</h3>
+                  <p className="eyebrow">Źródła wytwórcze</p>
+                  <h3>Produkcja energii</h3>
                 </div>
                 <span>{deviceGroups.solar.length}</span>
               </div>
@@ -244,7 +244,7 @@ export function DevicesView({
                 {deviceGroups.solar.length ? (
                   deviceGroups.solar.map(renderDevice)
                 ) : (
-                  <p className="muted device-empty">Brak instalacji fotowoltaicznych.</p>
+                  <p className="muted device-empty">Brak źródeł wytwórczych.</p>
                 )}
               </div>
             </section>

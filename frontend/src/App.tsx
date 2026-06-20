@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import './App.css'
 import { AppHeader } from './components/AppHeader'
 import { AppSidebar } from './components/AppSidebar'
@@ -80,6 +80,7 @@ function App() {
 
   const [activeView, setActiveView] = useState<AppView>('dashboard')
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
+  const powerSaveTimers = useRef<Record<number, number>>({})
 
   const canManage = canManageHouse(user)
   const devicePanelReady = dashboard !== null
@@ -442,7 +443,7 @@ function App() {
     }
   }
 
-  async function updateDevicePower(device: Device, value: number): Promise<void> {
+  function updateDevicePower(device: Device, value: number): void {
     if (!token || !canManage) return
 
     setDashboard((current) => {
@@ -450,20 +451,29 @@ function App() {
       return {
         ...current,
         devices: current.devices.map((item) =>
-          item.id === device.id ? { ...item, current_power_kw: value } : item,
+          item.id === device.id
+            ? { ...item, current_power_kw: value, is_active: value > 0 }
+            : item,
         ),
       }
     })
 
-    await request<Device>(
-      `/api/ems/devices/${device.id}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ current_power_kw: value, is_active: value > 0 }),
-      },
-      token,
-    )
-    await loadDashboard(token)
+    window.clearTimeout(powerSaveTimers.current[device.id])
+    powerSaveTimers.current[device.id] = window.setTimeout(() => {
+      void request<Device>(
+        `/api/ems/devices/${device.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ current_power_kw: value, is_active: value > 0 }),
+        },
+        token,
+      )
+        .then(() => loadDashboard(token))
+        .catch(() => loadDashboard(token))
+        .finally(() => {
+          delete powerSaveTimers.current[device.id]
+        })
+    }, 300)
   }
 
   function updateResidentField(field: keyof ResidentForm, value: string): void {
@@ -833,7 +843,7 @@ function App() {
             onFieldChange={updateDeviceFormField}
             onSubmit={(event) => void handleDeviceSubmit(event)}
             onResetForm={resetDeviceForm}
-            onPowerChange={(device, value) => void updateDevicePower(device, value)}
+            onPowerChange={updateDevicePower}
             onToggle={(device) => void toggleDevice(device)}
             onEdit={editDevice}
             onRequestDelete={requestDeleteDevice}

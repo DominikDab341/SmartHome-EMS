@@ -24,7 +24,7 @@ export const pageMeta: Record<
   devices: {
     eyebrow: 'Zarządzanie domem',
     title: 'Urządzenia',
-    description: 'Steruj odbiornikami i instalacją fotowoltaiczną.',
+    description: 'Steruj odbiornikami i źródłami wytwórczymi.',
   },
   analytics: {
     eyebrow: 'Dane i historia',
