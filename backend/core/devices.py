@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from database.models import DeviceType
+from database.models import Device, DeviceType
 
-from core.domain import DeviceState, Observer
+from core.domain import DeviceEvent, DeviceEventType, DeviceState, Observer, utc_now
 
 
 @dataclass
@@ -14,6 +14,7 @@ class SimulatedDevice:
     name: str
     type: DeviceType
     max_power_kw: float
+    house_id: int = 0
     id: int | None = None
     current_power_kw: float = 0.0
     is_active: bool = True
@@ -27,26 +28,59 @@ class SimulatedDevice:
         if observer in self._observers:
             self._observers.remove(observer)
 
-    def notify(self) -> None:
-        state = self.to_state()
+    def notify(self, action: DeviceEventType) -> None:
+        event = DeviceEvent(
+            house_id=self.house_id,
+            action=action,
+            device=self.to_state(),
+            timestamp=utc_now(),
+        )
         for observer in self._observers:
-            observer.update(state)
+            observer.update(event)
 
-    def turn_on(self) -> None:
+    def turn_on(self, *, notify: bool = True) -> None:
         self.is_active = True
-        if self.current_power_kw <= 0:
-            self.current_power_kw = self.max_power_kw
-        self.notify()
+        if self.type == DeviceType.SOLAR:
+            self.current_power_kw = 0.0
+        elif self.current_power_kw <= 0:
+            self.current_power_kw = min(
+                self.max_power_kw,
+                max(0.1, self.max_power_kw * 0.65),
+            )
+        if notify:
+            self.notify(DeviceEventType.TURNED_ON)
 
-    def turn_off(self) -> None:
+    def turn_off(self, *, notify: bool = True) -> None:
         self.is_active = False
-        self.notify()
+        if notify:
+            self.notify(DeviceEventType.TURNED_OFF)
 
-    def set_power(self, power_kw: float) -> None:
+    def set_power(self, power_kw: float, *, notify: bool = True) -> None:
         self.current_power_kw = max(0.0, min(power_kw, self.max_power_kw))
         if self.type == DeviceType.APPLIANCE:
             self.is_active = self.current_power_kw > 0
-        self.notify()
+        if notify:
+            self.notify(DeviceEventType.POWER_CHANGED)
+
+    def reconfigure(
+        self,
+        *,
+        name: str,
+        device_type: DeviceType,
+        max_power_kw: float,
+        current_power_kw: float,
+        is_active: bool,
+        notify: bool = True,
+    ) -> None:
+        if current_power_kw > max_power_kw:
+            raise ValueError("Current power cannot exceed maximum power")
+        self.name = name
+        self.type = device_type
+        self.max_power_kw = max_power_kw
+        self.current_power_kw = 0.0 if device_type == DeviceType.SOLAR else current_power_kw
+        self.is_active = is_active
+        if notify:
+            self.notify(DeviceEventType.UPDATED)
 
     def to_state(self) -> DeviceState:
         return DeviceState(
@@ -83,6 +117,20 @@ class ApplianceFactory:
             max_power_kw=max_power_kw,
             current_power_kw=current_power_kw,
             is_active=current_power_kw > 0 or device_type == DeviceType.SOLAR,
+        )
+
+    @staticmethod
+    def from_persisted_device(device: Device) -> SimulatedDevice:
+        if device.user_id is None:
+            raise ValueError("Persisted device must belong to a house")
+        return SimulatedDevice(
+            id=device.id,
+            house_id=device.user_id,
+            name=device.name,
+            type=device.type,
+            max_power_kw=device.max_power_kw,
+            current_power_kw=device.current_power_kw,
+            is_active=device.is_active,
         )
 
     @classmethod

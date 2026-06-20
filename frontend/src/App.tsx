@@ -840,6 +840,7 @@ function App() {
             pendingDeleteDeviceId={pendingDeleteDeviceId}
             deviceStats={deviceStats}
             deviceGroups={sortedDeviceGroups}
+            lastDeviceEvent={dashboard?.last_device_event ?? null}
             onFieldChange={updateDeviceFormField}
             onSubmit={(event) => void handleDeviceSubmit(event)}
             onResetForm={resetDeviceForm}

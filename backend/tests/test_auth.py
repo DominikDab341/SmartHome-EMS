@@ -160,6 +160,31 @@ async def test_dashboard_with_valid_token_returns_seeded_simulation_state():
     assert body["battery"]["total_capacity_kwh"] > 0
     assert body["settings"]["active_strategy"]
     assert isinstance(body["devices"], list)
+    assert "last_device_event" in body
+
+
+async def test_device_toggle_is_published_by_observer():
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        dashboard_response = await client.get("/api/ems/dashboard", headers=headers)
+        device = dashboard_response.json()["devices"][0]
+
+        toggle_response = await client.post(
+            f"/api/ems/devices/{device['id']}/toggle",
+            headers=headers,
+        )
+        assert toggle_response.status_code == 200, toggle_response.text
+
+        updated_dashboard = await client.get("/api/ems/dashboard", headers=headers)
+        event = updated_dashboard.json()["last_device_event"]
+
+        assert event["house_id"] > 0
+        assert event["device"]["id"] == device["id"]
+        assert event["action"] in {"turned_on", "turned_off"}
+
+        await client.post(f"/api/ems/devices/{device['id']}/toggle", headers=headers)
 
 
 async def test_owner_can_update_weather_location_by_city(monkeypatch):

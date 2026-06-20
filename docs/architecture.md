@@ -19,7 +19,10 @@ Rdzeniem systemu jest `EnergyManager`. Cykl działania (np. uruchamiany co minut
 ## 3. Zastosowane Wzorce Projektowe (OOP)
 Projekt akademicki wymaga silnego skupienia na paradygmacie obiektowym. Zastosowano:
 *   **Strategy**: `EnergyManagementStrategy` -> `MaximizeProfitStrategy`, `EcoFriendlyStrategy`, `BatteryLifePreservationStrategy`.
-*   **Observer**: Urządzenia emitują zmiany stanów, `EnergyManager` subskrybuje i aktualizuje system.
+*   **Observer**: Każda operacja API na urządzeniu przechodzi przez `SimulatedDevice`,
+    który emituje `DeviceEvent` zawierający typ zmiany, czas, stan urządzenia oraz
+    identyfikator domu. `EnergyManager` subskrybuje te zdarzenia i przechowuje
+    ostatnią zmianę osobno dla każdego domu; dashboard udostępnia ją użytkownikowi.
 *   **Factory Method**: `ApplianceFactory` do dynamicznego instancjonowania sprzętów na podstawie bazy.
 *   **Adapter**: `WeatherAdapter` ujednolica interfejs komunikacji z zewnętrznym API pogodowym.
 *   **Singleton**: `EnergyManager` gwarantuje pojedynczy punkt sterowania zasilaniem.

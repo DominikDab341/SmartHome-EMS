@@ -14,6 +14,21 @@ export type Device = {
   is_active: boolean
 }
 
+export type DeviceEventType =
+  | 'created'
+  | 'updated'
+  | 'power_changed'
+  | 'turned_on'
+  | 'turned_off'
+  | 'deleted'
+
+export type DeviceEvent = {
+  house_id: number
+  action: DeviceEventType
+  device: Device
+  timestamp: string
+}
+
 export type Battery = {
   id: number
   total_capacity_kwh: number
@@ -60,6 +75,7 @@ export type Dashboard = {
   devices: Device[]
   battery: Battery
   settings: Settings
+  last_device_event: DeviceEvent | null
   latest_log: EnergyLog | null
   logs: EnergyLog[]
 }

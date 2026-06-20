@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from core.domain import DeviceEventType
 from database.models import DeviceType, StrategyType, UserRole
 
 WeatherPreset = Literal["live", "sunny", "cloudy", "storm", "night"]
@@ -70,6 +71,15 @@ class DevicePublic(BaseModel):
     max_power_kw: float
     current_power_kw: float
     is_active: bool
+
+    model_config = {"from_attributes": True}
+
+
+class DeviceEventPublic(BaseModel):
+    house_id: int
+    action: DeviceEventType
+    device: DevicePublic
+    timestamp: datetime
 
     model_config = {"from_attributes": True}
 
@@ -206,5 +216,6 @@ class DashboardPublic(BaseModel):
     devices: list[DevicePublic]
     battery: BatteryPublic
     settings: SystemSettingsPublic
+    last_device_event: DeviceEventPublic | None
     latest_log: EnergyLogPublic | None
     logs: list[EnergyLogPublic]
