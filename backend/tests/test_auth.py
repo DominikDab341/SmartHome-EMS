@@ -189,6 +189,20 @@ async def test_owner_can_update_weather_location_by_city(monkeypatch):
     assert body["longitude"] == pytest.approx(18.64912)
 
 
+async def test_owner_can_select_weather_scenario():
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+        response = await client.post(
+            "/api/ems/settings/weather",
+            json={"preset": "storm"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["weather_preset"] == "storm"
+
+
 async def test_owner_can_refresh_tariffs_from_official_sources(monkeypatch):
     async def fake_fetch(provider: str) -> TariffQuote:
         assert provider == "PGE"

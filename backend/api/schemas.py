@@ -7,6 +7,8 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 from database.models import DeviceType, StrategyType, UserRole
 
+WeatherPreset = Literal["live", "sunny", "cloudy", "storm", "night"]
+
 
 class TokenResponse(BaseModel):
     """Response body returned on successful login."""
@@ -103,6 +105,7 @@ class SystemSettingsPublic(BaseModel):
     location_name: str
     latitude: float
     longitude: float
+    weather_preset: WeatherPreset
 
     model_config = {"from_attributes": True}
 
@@ -131,6 +134,10 @@ class LocationUpdateRequest(BaseModel):
         if len(city) < 2:
             raise ValueError("City name must contain at least two characters")
         return city
+
+
+class WeatherPresetRequest(BaseModel):
+    preset: WeatherPreset
 
 
 class TariffRefreshRequest(BaseModel):

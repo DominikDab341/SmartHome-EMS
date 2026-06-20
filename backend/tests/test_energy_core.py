@@ -132,6 +132,17 @@ def test_solar_factor_is_zero_at_night() -> None:
     assert WeatherAdapter._solar_factor(100.0, is_day=False) == 0.0
 
 
+def test_weather_presets_return_independent_conditions() -> None:
+    sunny = WeatherAdapter.condition_for_preset("sunny")
+    night = WeatherAdapter.condition_for_preset("night")
+
+    assert sunny is not None
+    assert sunny.solar_factor == pytest.approx(0.96)
+    assert night is not None
+    assert night.solar_factor == 0.0
+    assert WeatherAdapter.condition_for_preset("live") is None
+
+
 def test_production_is_zero_when_solar_factor_is_zero() -> None:
     devices = [
         SimpleNamespace(

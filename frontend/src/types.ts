@@ -1,5 +1,6 @@
 export type DeviceType = 'appliance' | 'solar'
 export type StrategyType = 'maximize_profit' | 'eco_friendly' | 'battery_life'
+export type WeatherPreset = 'live' | 'sunny' | 'cloudy' | 'storm' | 'night'
 export type AuthMode = 'login' | 'register'
 export type AppView = 'dashboard' | 'devices' | 'analytics' | 'residents'
 export type ConnectionStatus = 'Connecting' | 'Online' | 'Offline'
@@ -35,6 +36,7 @@ export type Settings = {
   location_name: string
   latitude: number
   longitude: number
+  weather_preset: WeatherPreset
 }
 
 export type EnergyLog = {

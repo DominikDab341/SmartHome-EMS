@@ -132,10 +132,12 @@ class EnergyManager:
             strategy: EnergyManagementStrategy = strategy_for(settings.active_strategy)
 
             interval_hours = interval_seconds / 3600
-            weather = await self.weather_adapter.get_condition(
-                settings.latitude,
-                settings.longitude,
-            )
+            weather = self.weather_adapter.condition_for_preset(settings.weather_preset)
+            if weather is None:
+                weather = await self.weather_adapter.get_condition(
+                    settings.latitude,
+                    settings.longitude,
+                )
             consumption_kwh = self._calculate_consumption(devices, interval_hours)
             production_kwh = self._calculate_production(devices, weather.solar_factor, interval_hours)
             battery_state = self._battery_state(battery)

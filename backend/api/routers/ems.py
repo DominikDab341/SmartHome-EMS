@@ -19,6 +19,7 @@ from api.schemas import (
     SystemSettingsPublic,
     SystemSettingsUpdate,
     TariffRefreshRequest,
+    WeatherPresetRequest,
 )
 from core.geocoding import (
     GeocodingServiceError,
@@ -255,6 +256,19 @@ async def update_location(
     system_settings.location_name = location.name
     system_settings.latitude = location.latitude
     system_settings.longitude = location.longitude
+    await db.commit()
+    await db.refresh(system_settings)
+    return SystemSettingsPublic.model_validate(system_settings)
+
+
+@router.post("/settings/weather", response_model=SystemSettingsPublic)
+async def update_weather_preset(
+    body: WeatherPresetRequest,
+    db: AsyncSession = Depends(get_db),
+    current_owner: User = Depends(get_current_owner),
+) -> SystemSettingsPublic:
+    system_settings = await _get_settings(db, house_scope_id(current_owner))
+    system_settings.weather_preset = body.preset
     await db.commit()
     await db.refresh(system_settings)
     return SystemSettingsPublic.model_validate(system_settings)

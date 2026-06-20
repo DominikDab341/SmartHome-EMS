@@ -12,6 +12,28 @@ class WeatherAdapter:
     """Adapter translating Open-Meteo responses into EMS WeatherCondition."""
 
     endpoint = "https://api.open-meteo.com/v1/forecast"
+    preset_conditions = {
+        "sunny": WeatherCondition(
+            cloud_cover=5.0,
+            solar_factor=0.96,
+            temperature_c=27.0,
+        ),
+        "cloudy": WeatherCondition(
+            cloud_cover=82.0,
+            solar_factor=0.3,
+            temperature_c=15.0,
+        ),
+        "storm": WeatherCondition(
+            cloud_cover=98.0,
+            solar_factor=0.1,
+            temperature_c=11.0,
+        ),
+        "night": WeatherCondition(
+            cloud_cover=25.0,
+            solar_factor=0.0,
+            temperature_c=12.0,
+        ),
+    }
 
     async def get_condition(self, latitude: float, longitude: float) -> WeatherCondition:
         params = {
@@ -53,4 +75,15 @@ class WeatherAdapter:
             cloud_cover=cloud_cover,
             solar_factor=round(daylight * self._solar_factor(cloud_cover), 3),
             temperature_c=21.0,
+        )
+
+    @classmethod
+    def condition_for_preset(cls, preset: str) -> WeatherCondition | None:
+        condition = cls.preset_conditions.get(preset)
+        if condition is None:
+            return None
+        return WeatherCondition(
+            cloud_cover=condition.cloud_cover,
+            solar_factor=condition.solar_factor,
+            temperature_c=condition.temperature_c,
         )
