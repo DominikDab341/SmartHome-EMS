@@ -1,3 +1,4 @@
+import pytest
 import pytest_asyncio
 
 from httpx import AsyncClient, ASGITransport
@@ -10,7 +11,10 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 from api.main import app
+from api.routers import ems
 from api.security import hash_password
+from core.geocoding import LocationMatch
+from core.tariffs import TariffQuote
 from database.config import settings
 from database.database import get_db
 from database.models import User, UserRole
@@ -54,9 +58,11 @@ async def test_user():
             username=TEST_USERNAME,
             email="test_auth@example.com",
             hashed_password=hash_password(TEST_PASSWORD),
-            role=UserRole.RESIDENT,
+            role=UserRole.OWNER,
         )
         session.add(user)
+        await session.flush()
+        user.house_id = user.id
         await session.commit()
 
     yield
@@ -139,6 +145,82 @@ async def test_protected_endpoint_with_valid_token_returns_200():
     assert "hashed_password" not in body  # passwords must never leak
 
 
+async def test_dashboard_with_valid_token_returns_seeded_simulation_state():
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+
+        response = await client.get(
+            "/api/ems/dashboard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["battery"]["total_capacity_kwh"] > 0
+    assert body["settings"]["active_strategy"]
+    assert isinstance(body["devices"], list)
+
+
+async def test_owner_can_update_weather_location_by_city(monkeypatch):
+    async def fake_resolve(city: str) -> LocationMatch:
+        assert city == "Gdańsk"
+        return LocationMatch(
+            name="Gdańsk, Polska",
+            latitude=54.35227,
+            longitude=18.64912,
+        )
+
+    monkeypatch.setattr(ems.geocoding_adapter, "resolve", fake_resolve)
+
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+        response = await client.post(
+            "/api/ems/settings/location",
+            json={"city": "  Gdańsk  "},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["location_name"] == "Gdańsk, Polska"
+    assert body["latitude"] == pytest.approx(54.35227)
+    assert body["longitude"] == pytest.approx(18.64912)
+
+
+async def test_owner_can_refresh_tariffs_from_official_sources(monkeypatch):
+    async def fake_fetch(provider: str) -> TariffQuote:
+        assert provider == "PGE"
+        return TariffQuote(
+            provider="PGE",
+            buy_price_pln_kwh=0.6189,
+            sell_price_pln_kwh=0.19137,
+            sell_period="maj 2026",
+            buy_source_url="https://example.test/pge",
+            sell_source_url="https://example.test/pse",
+        )
+
+    monkeypatch.setattr(ems.tariff_scraper, "fetch", fake_fetch)
+
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+        response = await client.post(
+            "/api/ems/settings/tariffs/refresh",
+            json={"provider": "PGE"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["grid_buy_price"] == pytest.approx(0.6189)
+    assert body["grid_sell_price"] == pytest.approx(0.19137)
+    assert body["tariff_provider"] == "PGE"
+    assert body["tariff_sell_period"] == "maj 2026"
+    assert body["tariff_updated_at"] is not None
+
+
 #Registration tests
 
 REG_USERNAME = "test_reg_user"
@@ -169,7 +251,8 @@ async def test_register_success_returns_201_with_user_data():
     body = response.json()
     assert body["username"] == REG_USERNAME
     assert body["email"] == REG_EMAIL
-    assert body["role"] == "RESIDENT"
+    assert body["role"] == "OWNER"
+    assert body["house_id"] == body["id"]
     assert "hashed_password" not in body
     assert "password" not in body
 

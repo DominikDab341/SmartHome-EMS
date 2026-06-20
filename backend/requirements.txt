@@ -1,14 +1,15 @@
-fastapi[standard]
-sqlalchemy
+fastapi
+uvicorn
+sqlalchemy[asyncio]
 asyncpg
 alembic
-python-dotenv
+pydantic
 pydantic-settings
+httpx
 bcrypt
-PyJWT[crypto]
+PyJWT
 python-multipart
-
-# testing
+email-validator
+watchfiles
 pytest
 pytest-asyncio
-httpx

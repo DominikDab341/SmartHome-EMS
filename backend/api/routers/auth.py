@@ -69,7 +69,7 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ) -> UserPublic:
     """
-    Create a new user account with the **RESIDENT** role.
+    Create a new owner account with its own house.
 
     - Returns the created user profile on success.
     - Returns **HTTP 409** if the username or email is already taken.
@@ -92,9 +92,11 @@ async def register(
         username=body.username,
         email=body.email,
         hashed_password=hash_password(body.password),
-        role=UserRole.RESIDENT,
+        role=UserRole.OWNER,
     )
     db.add(user)
+    await db.flush()
+    user.house_id = user.id
     await db.commit()
     await db.refresh(user)
 
