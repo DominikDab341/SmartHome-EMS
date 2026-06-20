@@ -9,7 +9,9 @@ type AppHeaderProps = {
   status: ConnectionStatus
   canManage: boolean
   busy: boolean
+  instructorPanelOpen: boolean
   onOpenMobile: () => void
+  onToggleInstructorPanel: () => void
   onRunTick: () => void
 }
 
@@ -19,7 +21,9 @@ export function AppHeader({
   status,
   canManage,
   busy,
+  instructorPanelOpen,
   onOpenMobile,
+  onToggleInstructorPanel,
   onRunTick,
 }: AppHeaderProps) {
   const meta = pageMeta[activeView]
@@ -48,10 +52,22 @@ export function AppHeader({
           {status === 'Online' ? 'Na żywo' : status}
         </div>
         {canManage && (
-          <button type="button" className="primary-action" onClick={onRunTick} disabled={busy}>
-            <Icon name="play" size={18} />
-            {busy ? 'Przeliczam…' : `Symuluj ${SIMULATION_CYCLE_MINUTES} minut`}
-          </button>
+          <>
+            <button
+              type="button"
+              className={`ghost-button instructor-toggle ${instructorPanelOpen ? 'active' : ''}`}
+              onClick={onToggleInstructorPanel}
+              aria-expanded={instructorPanelOpen}
+              aria-controls="instructor-panel"
+            >
+              <Icon name="weather" size={18} />
+              {instructorPanelOpen ? 'Ukryj panel' : 'Panel prowadzącego'}
+            </button>
+            <button type="button" className="primary-action" onClick={onRunTick} disabled={busy}>
+              <Icon name="play" size={18} />
+              {busy ? 'Przeliczam…' : `Symuluj ${SIMULATION_CYCLE_MINUTES} minut`}
+            </button>
+          </>
         )}
       </div>
     </header>

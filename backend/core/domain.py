@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
@@ -26,6 +27,23 @@ class DeviceState:
     @property
     def effective_power_kw(self) -> float:
         return self.current_power_kw if self.is_active else 0.0
+
+
+class DeviceEventType(str, enum.Enum):
+    CREATED = "created"
+    UPDATED = "updated"
+    POWER_CHANGED = "power_changed"
+    TURNED_ON = "turned_on"
+    TURNED_OFF = "turned_off"
+    DELETED = "deleted"
+
+
+@dataclass(slots=True)
+class DeviceEvent:
+    house_id: int
+    action: DeviceEventType
+    device: DeviceState
+    timestamp: datetime
 
 
 @dataclass(slots=True)
@@ -98,8 +116,8 @@ class EnergySnapshot:
 
 
 class Observer(Protocol):
-    def update(self, device_state: DeviceState) -> None:
-        """Receive a device state update."""
+    def update(self, event: DeviceEvent) -> None:
+        """Receive a device domain event."""
 
 
 class Subject(Protocol):
@@ -109,7 +127,7 @@ class Subject(Protocol):
     def detach(self, observer: Observer) -> None:
         """Detach an observer."""
 
-    def notify(self) -> None:
+    def notify(self, action: DeviceEventType) -> None:
         """Notify observers."""
 
 

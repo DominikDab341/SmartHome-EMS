@@ -1,5 +1,6 @@
 export type DeviceType = 'appliance' | 'solar'
 export type StrategyType = 'maximize_profit' | 'eco_friendly' | 'battery_life'
+export type WeatherPreset = 'live' | 'sunny' | 'cloudy' | 'storm' | 'night'
 export type AuthMode = 'login' | 'register'
 export type AppView = 'dashboard' | 'devices' | 'analytics' | 'residents'
 export type ConnectionStatus = 'Connecting' | 'Online' | 'Offline'
@@ -11,6 +12,21 @@ export type Device = {
   max_power_kw: number
   current_power_kw: number
   is_active: boolean
+}
+
+export type DeviceEventType =
+  | 'created'
+  | 'updated'
+  | 'power_changed'
+  | 'turned_on'
+  | 'turned_off'
+  | 'deleted'
+
+export type DeviceEvent = {
+  house_id: number
+  action: DeviceEventType
+  device: Device
+  timestamp: string
 }
 
 export type Battery = {
@@ -35,6 +51,7 @@ export type Settings = {
   location_name: string
   latitude: number
   longitude: number
+  weather_preset: WeatherPreset
 }
 
 export type EnergyLog = {
@@ -58,6 +75,7 @@ export type Dashboard = {
   devices: Device[]
   battery: Battery
   settings: Settings
+  last_device_event: DeviceEvent | null
   latest_log: EnergyLog | null
   logs: EnergyLog[]
 }

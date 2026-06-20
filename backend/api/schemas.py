@@ -5,7 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from core.domain import DeviceEventType
 from database.models import DeviceType, StrategyType, UserRole
+
+WeatherPreset = Literal["live", "sunny", "cloudy", "storm", "night"]
 
 
 class TokenResponse(BaseModel):
@@ -72,6 +75,15 @@ class DevicePublic(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DeviceEventPublic(BaseModel):
+    house_id: int
+    action: DeviceEventType
+    device: DevicePublic
+    timestamp: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class BatteryPublic(BaseModel):
     id: int
     total_capacity_kwh: float
@@ -103,6 +115,7 @@ class SystemSettingsPublic(BaseModel):
     location_name: str
     latitude: float
     longitude: float
+    weather_preset: WeatherPreset
 
     model_config = {"from_attributes": True}
 
@@ -131,6 +144,10 @@ class LocationUpdateRequest(BaseModel):
         if len(city) < 2:
             raise ValueError("City name must contain at least two characters")
         return city
+
+
+class WeatherPresetRequest(BaseModel):
+    preset: WeatherPreset
 
 
 class TariffRefreshRequest(BaseModel):
@@ -199,5 +216,6 @@ class DashboardPublic(BaseModel):
     devices: list[DevicePublic]
     battery: BatteryPublic
     settings: SystemSettingsPublic
+    last_device_event: DeviceEventPublic | None
     latest_log: EnergyLogPublic | None
     logs: list[EnergyLogPublic]

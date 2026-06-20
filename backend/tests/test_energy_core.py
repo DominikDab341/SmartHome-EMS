@@ -15,7 +15,14 @@ from core.tariffs import TariffScrapeError, TariffScraper
 from core.weather import WeatherAdapter
 from database.models import DeviceType, StrategyType
 
-from core.domain import BatteryState, HomeState, PricingState, WeatherCondition
+from core.domain import (
+    BatteryState,
+    DeviceEvent,
+    DeviceEventType,
+    HomeState,
+    PricingState,
+    WeatherCondition,
+)
 from core.strategies import strategy_for
 
 
@@ -132,6 +139,17 @@ def test_solar_factor_is_zero_at_night() -> None:
     assert WeatherAdapter._solar_factor(100.0, is_day=False) == 0.0
 
 
+def test_weather_presets_return_independent_conditions() -> None:
+    sunny = WeatherAdapter.condition_for_preset("sunny")
+    night = WeatherAdapter.condition_for_preset("night")
+
+    assert sunny is not None
+    assert sunny.solar_factor == pytest.approx(0.96)
+    assert night is not None
+    assert night.solar_factor == 0.0
+    assert WeatherAdapter.condition_for_preset("live") is None
+
+
 def test_production_is_zero_when_solar_factor_is_zero() -> None:
     devices = [
         SimpleNamespace(
@@ -191,6 +209,62 @@ def test_turning_device_off_preserves_configured_power() -> None:
     device.turn_on()
     assert device.is_active is True
     assert device.current_power_kw == 2.0
+
+
+def test_simulated_device_notifies_observer_with_house_context() -> None:
+    events: list[DeviceEvent] = []
+
+    class RecordingObserver:
+        def update(self, event: DeviceEvent) -> None:
+            events.append(event)
+
+    device = SimulatedDevice(
+        id=7,
+        house_id=42,
+        name="Fridge",
+        type=DeviceType.APPLIANCE,
+        max_power_kw=0.18,
+        current_power_kw=0.12,
+    )
+    device.attach(RecordingObserver())
+    device.set_power(0.08)
+
+    assert len(events) == 1
+    assert events[0].house_id == 42
+    assert events[0].action == DeviceEventType.POWER_CHANGED
+    assert events[0].device.id == 7
+    assert events[0].device.current_power_kw == pytest.approx(0.08)
+
+
+def test_energy_manager_keeps_last_device_event_per_house() -> None:
+    manager = EnergyManager()
+    manager.clear_device_events()
+    first = SimulatedDevice(
+        id=1,
+        house_id=10,
+        name="Fridge",
+        type=DeviceType.APPLIANCE,
+        max_power_kw=0.18,
+        current_power_kw=0.12,
+    )
+    second = SimulatedDevice(
+        id=2,
+        house_id=20,
+        name="Heat pump",
+        type=DeviceType.APPLIANCE,
+        max_power_kw=3.2,
+        current_power_kw=2.1,
+    )
+    first.attach(manager)
+    second.attach(manager)
+
+    first.turn_off()
+    second.set_power(1.5)
+
+    assert manager.last_device_event(10).action == DeviceEventType.TURNED_OFF
+    assert manager.last_device_event(20).action == DeviceEventType.POWER_CHANGED
+    assert manager.last_device_event(10).device.id == 1
+    manager.clear_device_events()
 
 
 def test_geocoding_payload_is_converted_to_location() -> None:

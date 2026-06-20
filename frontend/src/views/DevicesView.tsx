@@ -2,6 +2,7 @@ import type { FormEvent } from 'react'
 import { DeviceCard } from '../components/DeviceCard'
 import type {
   Device,
+  DeviceEvent,
   DeviceForm,
   DeviceGroups,
   DeviceStats,
@@ -18,6 +19,7 @@ type DevicesViewProps = {
   pendingDeleteDeviceId: number | null
   deviceStats: DeviceStats
   deviceGroups: DeviceGroups
+  lastDeviceEvent: DeviceEvent | null
   onFieldChange: <K extends keyof DeviceForm>(field: K, value: DeviceForm[K]) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
   onResetForm: () => void
@@ -40,6 +42,7 @@ export function DevicesView({
   pendingDeleteDeviceId,
   deviceStats,
   deviceGroups,
+  lastDeviceEvent,
   onFieldChange,
   onSubmit,
   onResetForm,
@@ -50,6 +53,14 @@ export function DevicesView({
   onConfirmDelete,
   onCancelDelete,
 }: DevicesViewProps) {
+  const eventLabels: Record<DeviceEvent['action'], string> = {
+    created: 'Dodano urządzenie',
+    updated: 'Zaktualizowano konfigurację',
+    power_changed: 'Zmieniono pobór mocy',
+    turned_on: 'Włączono urządzenie',
+    turned_off: 'Wyłączono urządzenie',
+    deleted: 'Usunięto urządzenie',
+  }
   const renderDevice = (device: Device) => (
     <DeviceCard
       key={device.id}
@@ -77,15 +88,36 @@ export function DevicesView({
               <p className="eyebrow">Infrastruktura domu</p>
               <h2>{deviceStats.active} z {deviceStats.total} urządzeń aktywnych</h2>
               <p className="section-description">
-                Zmieniaj moc odbiorników, wyłączaj sprzęty i zarządzaj instalacją PV.
+                Zmieniaj moc odbiorników, wyłączaj sprzęty i zarządzaj źródłami wytwórczymi.
               </p>
             </div>
             <div className="device-summary">
               <span>{deviceStats.total} łącznie</span>
               <span>{deviceStats.appliances} odbiorników</span>
-              <span>{deviceStats.solar} instalacji PV</span>
+              <span>{deviceStats.solar} źródeł wytwórczych</span>
             </div>
           </div>
+
+          {lastDeviceEvent && (
+            <div className="device-event" role="status">
+              <span className="card-icon">
+                <DeviceEventIcon action={lastDeviceEvent.action} />
+              </span>
+              <div>
+                <strong>{eventLabels[lastDeviceEvent.action]}</strong>
+                <p>
+                  {lastDeviceEvent.device.name}
+                  {' · '}
+                  {new Intl.DateTimeFormat('pl-PL', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  }).format(new Date(lastDeviceEvent.timestamp))}
+                </p>
+              </div>
+              <small>Observer</small>
+            </div>
+          )}
 
           {canManage ? (
             <form className="device-form" onSubmit={onSubmit}>
@@ -138,7 +170,7 @@ export function DevicesView({
                       onClick={() => onFieldChange('type', 'solar')}
                       disabled={deviceBusy || !devicePanelReady}
                     >
-                      Fotowoltaika
+                      Źródło wytwórcze
                     </button>
                   </div>
                 </div>
@@ -232,11 +264,11 @@ export function DevicesView({
               </div>
             </section>
 
-            <section className="device-group" aria-label="PV devices">
+            <section className="device-group" aria-label="Źródła wytwórcze">
               <div className="device-group-heading">
                 <div>
-                  <p className="eyebrow">Produkcja</p>
-                  <h3>Instalacje fotowoltaiczne</h3>
+                  <p className="eyebrow">Źródła wytwórcze</p>
+                  <h3>Produkcja energii</h3>
                 </div>
                 <span>{deviceGroups.solar.length}</span>
               </div>
@@ -244,7 +276,7 @@ export function DevicesView({
                 {deviceGroups.solar.length ? (
                   deviceGroups.solar.map(renderDevice)
                 ) : (
-                  <p className="muted device-empty">Brak instalacji fotowoltaicznych.</p>
+                  <p className="muted device-empty">Brak źródeł wytwórczych.</p>
                 )}
               </div>
             </section>
@@ -253,4 +285,10 @@ export function DevicesView({
       </div>
     </section>
   )
+}
+
+function DeviceEventIcon({ action }: { action: DeviceEvent['action'] }) {
+  if (action === 'created') return <span aria-hidden="true">+</span>
+  if (action === 'deleted') return <span aria-hidden="true">−</span>
+  return <span aria-hidden="true">↻</span>
 }

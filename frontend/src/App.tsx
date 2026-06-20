@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import './App.css'
 import { AppHeader } from './components/AppHeader'
 import { AppSidebar } from './components/AppSidebar'
 import { AuthScreen, SessionLoadingScreen } from './components/AuthScreen'
+import { SimulationControlPanel } from './components/SimulationControlPanel'
 import { TOKEN_STORAGE_KEY } from './config'
 import { ApiError, request } from './lib/api'
 import {
@@ -21,6 +22,7 @@ import type {
   AppView,
   AuthForm,
   AuthMode,
+  Battery,
   ConnectionStatus,
   Dashboard,
   Device,
@@ -31,6 +33,7 @@ import type {
   StrategyType,
   TokenResponse,
   UserProfile,
+  WeatherPreset,
 } from './types'
 import { AnalyticsView } from './views/AnalyticsView'
 import { DashboardView } from './views/DashboardView'
@@ -59,6 +62,9 @@ function App() {
   const [locationError, setLocationError] = useState<string | null>(null)
   const [tariffBusy, setTariffBusy] = useState(false)
   const [tariffError, setTariffError] = useState<string | null>(null)
+  const [instructorPanelOpen, setInstructorPanelOpen] = useState(false)
+  const [instructorBusy, setInstructorBusy] = useState(false)
+  const [instructorError, setInstructorError] = useState<string | null>(null)
 
   const [deviceForm, setDeviceForm] = useState<DeviceForm>(emptyDeviceForm)
   const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null)
@@ -74,6 +80,7 @@ function App() {
 
   const [activeView, setActiveView] = useState<AppView>('dashboard')
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false)
+  const powerSaveTimers = useRef<Record<number, number>>({})
 
   const canManage = canManageHouse(user)
   const devicePanelReady = dashboard !== null
@@ -141,6 +148,9 @@ function App() {
     setLocationError(null)
     setTariffBusy(false)
     setTariffError(null)
+    setInstructorPanelOpen(false)
+    setInstructorBusy(false)
+    setInstructorError(null)
     setActiveView('dashboard')
     setMobileNavigationOpen(false)
   }, [])
@@ -433,7 +443,7 @@ function App() {
     }
   }
 
-  async function updateDevicePower(device: Device, value: number): Promise<void> {
+  function updateDevicePower(device: Device, value: number): void {
     if (!token || !canManage) return
 
     setDashboard((current) => {
@@ -441,20 +451,29 @@ function App() {
       return {
         ...current,
         devices: current.devices.map((item) =>
-          item.id === device.id ? { ...item, current_power_kw: value } : item,
+          item.id === device.id
+            ? { ...item, current_power_kw: value, is_active: value > 0 }
+            : item,
         ),
       }
     })
 
-    await request<Device>(
-      `/api/ems/devices/${device.id}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ current_power_kw: value, is_active: value > 0 }),
-      },
-      token,
-    )
-    await loadDashboard(token)
+    window.clearTimeout(powerSaveTimers.current[device.id])
+    powerSaveTimers.current[device.id] = window.setTimeout(() => {
+      void request<Device>(
+        `/api/ems/devices/${device.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ current_power_kw: value, is_active: value > 0 }),
+        },
+        token,
+      )
+        .then(() => loadDashboard(token))
+        .catch(() => loadDashboard(token))
+        .finally(() => {
+          delete powerSaveTimers.current[device.id]
+        })
+    }, 300)
   }
 
   function updateResidentField(field: keyof ResidentForm, value: string): void {
@@ -650,6 +669,79 @@ function App() {
     }
   }
 
+  async function setWeatherPreset(preset: WeatherPreset): Promise<void> {
+    if (!token || !canManage) return
+
+    setInstructorBusy(true)
+    setInstructorError(null)
+    try {
+      const settings = await request<Settings>(
+        '/api/ems/settings/weather',
+        {
+          method: 'POST',
+          body: JSON.stringify({ preset }),
+        },
+        token,
+      )
+      setDashboard((current) => (current ? { ...current, settings } : current))
+    } catch {
+      setInstructorError('Nie udało się zmienić scenariusza pogodowego.')
+    } finally {
+      setInstructorBusy(false)
+    }
+  }
+
+  async function setBatteryLevel(percentage: number): Promise<void> {
+    if (!token || !canManage || !dashboard) return
+
+    const currentCharge = dashboard.battery.total_capacity_kwh * (percentage / 100)
+    setInstructorBusy(true)
+    setInstructorError(null)
+    try {
+      const battery = await request<Battery>(
+        '/api/ems/battery',
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ current_charge_kwh: currentCharge }),
+        },
+        token,
+      )
+      setDashboard((current) => (current ? { ...current, battery } : current))
+    } catch {
+      setInstructorError('Nie udało się ustawić poziomu baterii.')
+    } finally {
+      setInstructorBusy(false)
+    }
+  }
+
+  async function setSimulationPrices(
+    gridBuyPrice: number,
+    gridSellPrice: number,
+  ): Promise<void> {
+    if (!token || !canManage) return
+
+    setInstructorBusy(true)
+    setInstructorError(null)
+    try {
+      const settings = await request<Settings>(
+        '/api/ems/settings',
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            grid_buy_price: gridBuyPrice,
+            grid_sell_price: gridSellPrice,
+          }),
+        },
+        token,
+      )
+      setDashboard((current) => (current ? { ...current, settings } : current))
+    } catch {
+      setInstructorError('Nie udało się zmienić cen energii.')
+    } finally {
+      setInstructorBusy(false)
+    }
+  }
+
   if (!token || (!user && !checkingSession)) {
     return (
       <AuthScreen
@@ -689,10 +781,31 @@ function App() {
           username={user.username}
           status={status}
           canManage={canManage}
-          busy={busy || settingsBusy}
+          busy={busy || settingsBusy || instructorBusy}
+          instructorPanelOpen={instructorPanelOpen}
           onOpenMobile={() => setMobileNavigationOpen(true)}
+          onToggleInstructorPanel={() => {
+            setInstructorPanelOpen((open) => !open)
+            setInstructorError(null)
+          }}
           onRunTick={() => void runTick()}
         />
+
+        {canManage && instructorPanelOpen && (
+          <SimulationControlPanel
+            dashboard={dashboard}
+            busy={busy || settingsBusy || instructorBusy}
+            error={instructorError}
+            onClose={() => setInstructorPanelOpen(false)}
+            onRunTick={() => void runTick()}
+            onStrategyChange={(strategy) => void setStrategy(strategy)}
+            onWeatherChange={(preset) => void setWeatherPreset(preset)}
+            onBatteryLevelChange={(percentage) => void setBatteryLevel(percentage)}
+            onPriceChange={(buyPrice, sellPrice) =>
+              void setSimulationPrices(buyPrice, sellPrice)
+            }
+          />
+        )}
 
         {activeView === 'dashboard' && (
           <DashboardView
@@ -727,10 +840,11 @@ function App() {
             pendingDeleteDeviceId={pendingDeleteDeviceId}
             deviceStats={deviceStats}
             deviceGroups={sortedDeviceGroups}
+            lastDeviceEvent={dashboard?.last_device_event ?? null}
             onFieldChange={updateDeviceFormField}
             onSubmit={(event) => void handleDeviceSubmit(event)}
             onResetForm={resetDeviceForm}
-            onPowerChange={(device, value) => void updateDevicePower(device, value)}
+            onPowerChange={updateDevicePower}
             onToggle={(device) => void toggleDevice(device)}
             onEdit={editDevice}
             onRequestDelete={requestDeleteDevice}

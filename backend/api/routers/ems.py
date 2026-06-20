@@ -10,6 +10,7 @@ from api.schemas import (
     BatteryUpdate,
     DashboardPublic,
     DeviceCreate,
+    DeviceEventPublic,
     DevicePublic,
     DeviceUpdate,
     EnergyLogPublic,
@@ -19,7 +20,10 @@ from api.schemas import (
     SystemSettingsPublic,
     SystemSettingsUpdate,
     TariffRefreshRequest,
+    WeatherPresetRequest,
 )
+from core.devices import ApplianceFactory, SimulatedDevice
+from core.domain import DeviceEventType, utc_now
 from core.geocoding import (
     GeocodingServiceError,
     LocationNotFoundError,
@@ -27,7 +31,6 @@ from core.geocoding import (
 )
 from core.manager import energy_manager
 from core.tariffs import TariffScrapeError, tariff_scraper
-from core.domain import utc_now
 from database.config import settings as app_settings
 from database.database import get_db
 from database.models import Battery, Device, DeviceType, EnergyLog, SystemSettings, User
@@ -86,6 +89,11 @@ async def get_dashboard(
         devices=[DevicePublic.model_validate(device) for device in devices],
         battery=BatteryPublic.model_validate(battery),
         settings=SystemSettingsPublic.model_validate(system_settings),
+        last_device_event=(
+            DeviceEventPublic.model_validate(energy_manager.last_device_event(house_id))
+            if energy_manager.last_device_event(house_id)
+            else None
+        ),
         latest_log=EnergyLogPublic.model_validate(logs[0]) if logs else None,
         logs=[EnergyLogPublic.model_validate(log) for log in reversed(logs)],
     )
@@ -125,6 +133,8 @@ async def create_device(
     db.add(device)
     await db.commit()
     await db.refresh(device)
+    simulated = _observed_device(device)
+    simulated.notify(DeviceEventType.CREATED)
     return DevicePublic.model_validate(device)
 
 
@@ -135,23 +145,49 @@ async def update_device(
     db: AsyncSession = Depends(get_db),
     current_owner: User = Depends(get_current_owner),
 ) -> DevicePublic:
-    device = await _get_device(db, device_id, house_scope_id(current_owner))
+    house_id = house_scope_id(current_owner)
+    device = await _get_device(db, device_id, house_id)
     updates = body.model_dump(exclude_unset=True)
-    next_type = updates.get("type", device.type)
-    next_max_power = updates.get("max_power_kw", device.max_power_kw)
-    next_current_power = updates.get("current_power_kw", device.current_power_kw)
-    if next_type == DeviceType.SOLAR:
-        next_current_power = 0.0
-        updates["current_power_kw"] = 0.0
-    if next_current_power > next_max_power:
+    simulated = _observed_device(device)
+
+    try:
+        if (
+            "current_power_kw" in updates
+            and set(updates).issubset({"current_power_kw", "is_active"})
+            and device.type == DeviceType.APPLIANCE
+        ):
+            simulated.set_power(updates["current_power_kw"], notify=False)
+            action = DeviceEventType.POWER_CHANGED
+        elif set(updates) == {"is_active"}:
+            if updates["is_active"]:
+                simulated.turn_on(notify=False)
+                action = DeviceEventType.TURNED_ON
+            else:
+                simulated.turn_off(notify=False)
+                action = DeviceEventType.TURNED_OFF
+        else:
+            simulated.reconfigure(
+                name=updates.get("name", device.name),
+                device_type=updates.get("type", device.type),
+                max_power_kw=updates.get("max_power_kw", device.max_power_kw),
+                current_power_kw=updates.get(
+                    "current_power_kw",
+                    device.current_power_kw,
+                ),
+                is_active=updates.get("is_active", device.is_active),
+                notify=False,
+            )
+            action = DeviceEventType.UPDATED
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Current power cannot exceed maximum power",
-        )
-    for key, value in updates.items():
-        setattr(device, key, value)
+            detail=str(exc),
+        ) from exc
+
+    _apply_simulated_state(device, simulated)
     await db.commit()
     await db.refresh(device)
+    simulated.notify(action)
     return DevicePublic.model_validate(device)
 
 
@@ -162,13 +198,17 @@ async def toggle_device(
     current_owner: User = Depends(get_current_owner),
 ) -> DevicePublic:
     device = await _get_device(db, device_id, house_scope_id(current_owner))
-    device.is_active = not device.is_active
-    if device.type == DeviceType.SOLAR:
-        device.current_power_kw = 0.0
-    elif device.is_active and device.current_power_kw == 0:
-        device.current_power_kw = min(device.max_power_kw, max(0.1, device.max_power_kw * 0.65))
+    simulated = _observed_device(device)
+    if simulated.is_active:
+        simulated.turn_off(notify=False)
+        action = DeviceEventType.TURNED_OFF
+    else:
+        simulated.turn_on(notify=False)
+        action = DeviceEventType.TURNED_ON
+    _apply_simulated_state(device, simulated)
     await db.commit()
     await db.refresh(device)
+    simulated.notify(action)
     return DevicePublic.model_validate(device)
 
 
@@ -179,8 +219,10 @@ async def delete_device(
     current_owner: User = Depends(get_current_owner),
 ) -> None:
     device = await _get_device(db, device_id, house_scope_id(current_owner))
+    simulated = _observed_device(device)
     await db.delete(device)
     await db.commit()
+    simulated.notify(DeviceEventType.DELETED)
 
 
 @router.get("/battery", response_model=BatteryPublic)
@@ -255,6 +297,19 @@ async def update_location(
     system_settings.location_name = location.name
     system_settings.latitude = location.latitude
     system_settings.longitude = location.longitude
+    await db.commit()
+    await db.refresh(system_settings)
+    return SystemSettingsPublic.model_validate(system_settings)
+
+
+@router.post("/settings/weather", response_model=SystemSettingsPublic)
+async def update_weather_preset(
+    body: WeatherPresetRequest,
+    db: AsyncSession = Depends(get_db),
+    current_owner: User = Depends(get_current_owner),
+) -> SystemSettingsPublic:
+    system_settings = await _get_settings(db, house_scope_id(current_owner))
+    system_settings.weather_preset = body.preset
     await db.commit()
     await db.refresh(system_settings)
     return SystemSettingsPublic.model_validate(system_settings)
@@ -344,6 +399,21 @@ async def _get_device(db: AsyncSession, device_id: int, user_id: int) -> Device:
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
     return device
+
+
+def _observed_device(device: Device) -> SimulatedDevice:
+    simulated = ApplianceFactory.from_persisted_device(device)
+    simulated.attach(energy_manager)
+    return simulated
+
+
+def _apply_simulated_state(device: Device, simulated: SimulatedDevice) -> None:
+    state = simulated.to_state()
+    device.name = state.name
+    device.type = state.type
+    device.max_power_kw = state.max_power_kw
+    device.current_power_kw = state.current_power_kw
+    device.is_active = state.is_active
 
 
 async def _get_battery(db: AsyncSession, user_id: int) -> Battery:

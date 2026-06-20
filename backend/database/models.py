@@ -147,6 +147,11 @@ class SystemSettings(Base):
     location_name: Mapped[str] = mapped_column(String(96), nullable=False, default="Warsaw")
     latitude: Mapped[float] = mapped_column(Float, nullable=False, default=52.2297)
     longitude: Mapped[float] = mapped_column(Float, nullable=False, default=21.0122)
+    weather_preset: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="live",
+    )
 
 
 class EnergyLog(Base):

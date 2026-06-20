@@ -17,7 +17,7 @@ from database.models import (
 from core.devices import ApplianceFactory
 from core.domain import (
     BatteryState,
-    DeviceState,
+    DeviceEvent,
     EnergyDecision,
     EnergySnapshot,
     HomeState,
@@ -43,13 +43,22 @@ class EnergyManager:
         if self._initialized:
             return
         self.weather_adapter = weather_adapter or WeatherAdapter()
-        self._last_device_update: DeviceState | None = None
+        self._last_device_events: dict[int, DeviceEvent] = {}
         self._lock = asyncio.Lock()
         self._initialized = True
 
-    def update(self, device_state: DeviceState) -> None:
-        """Observer callback used by simulated devices."""
-        self._last_device_update = device_state
+    def update(self, event: DeviceEvent) -> None:
+        """Observer callback receiving device events scoped to one house."""
+        self._last_device_events[event.house_id] = event
+
+    def last_device_event(self, house_id: int) -> DeviceEvent | None:
+        return self._last_device_events.get(house_id)
+
+    def clear_device_events(self, house_id: int | None = None) -> None:
+        if house_id is None:
+            self._last_device_events.clear()
+            return
+        self._last_device_events.pop(house_id, None)
 
     async def reset_seed_data(self, db: AsyncSession, user_id: int) -> None:
         """Clear one user's simulation tables and recreate demo data from current code."""
@@ -58,6 +67,7 @@ class EnergyManager:
         await db.execute(delete(Battery).where(Battery.user_id == user_id))
         await db.execute(delete(SystemSettings).where(SystemSettings.user_id == user_id))
         await db.commit()
+        self.clear_device_events(user_id)
         await self.ensure_seed_data(db, user_id)
 
     async def ensure_seed_data(self, db: AsyncSession, user_id: int) -> None:
@@ -132,10 +142,12 @@ class EnergyManager:
             strategy: EnergyManagementStrategy = strategy_for(settings.active_strategy)
 
             interval_hours = interval_seconds / 3600
-            weather = await self.weather_adapter.get_condition(
-                settings.latitude,
-                settings.longitude,
-            )
+            weather = self.weather_adapter.condition_for_preset(settings.weather_preset)
+            if weather is None:
+                weather = await self.weather_adapter.get_condition(
+                    settings.latitude,
+                    settings.longitude,
+                )
             consumption_kwh = self._calculate_consumption(devices, interval_hours)
             production_kwh = self._calculate_production(devices, weather.solar_factor, interval_hours)
             battery_state = self._battery_state(battery)
