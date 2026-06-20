@@ -14,6 +14,7 @@ from api.main import app
 from api.routers import ems
 from api.security import hash_password
 from core.geocoding import LocationMatch
+from core.tariffs import TariffQuote
 from database.config import settings
 from database.database import get_db
 from database.models import User, UserRole
@@ -186,6 +187,38 @@ async def test_owner_can_update_weather_location_by_city(monkeypatch):
     assert body["location_name"] == "Gdańsk, Polska"
     assert body["latitude"] == pytest.approx(54.35227)
     assert body["longitude"] == pytest.approx(18.64912)
+
+
+async def test_owner_can_refresh_tariffs_from_official_sources(monkeypatch):
+    async def fake_fetch(provider: str) -> TariffQuote:
+        assert provider == "PGE"
+        return TariffQuote(
+            provider="PGE",
+            buy_price_pln_kwh=0.6189,
+            sell_price_pln_kwh=0.19137,
+            sell_period="maj 2026",
+            buy_source_url="https://example.test/pge",
+            sell_source_url="https://example.test/pse",
+        )
+
+    monkeypatch.setattr(ems.tariff_scraper, "fetch", fake_fetch)
+
+    async with _client() as client:
+        login_response = await _login(client, TEST_USERNAME, TEST_PASSWORD)
+        token = login_response.json()["access_token"]
+        response = await client.post(
+            "/api/ems/settings/tariffs/refresh",
+            json={"provider": "PGE"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["grid_buy_price"] == pytest.approx(0.6189)
+    assert body["grid_sell_price"] == pytest.approx(0.19137)
+    assert body["tariff_provider"] == "PGE"
+    assert body["tariff_sell_period"] == "maj 2026"
+    assert body["tariff_updated_at"] is not None
 
 
 #Registration tests

@@ -129,6 +129,16 @@ class SystemSettings(Base):
     )
     grid_buy_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)
     grid_sell_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.45)
+    tariff_provider: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="PGE",
+    )
+    tariff_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    tariff_sell_period: Mapped[str | None] = mapped_column(String(48), nullable=True)
     battery_export_threshold_percentage: Mapped[float] = mapped_column(
         Float,
         nullable=False,

@@ -11,6 +11,7 @@ import { EnergyChart } from '../components/EnergyChart'
 import { ExportThresholdControl } from '../components/ExportThresholdControl'
 import { Icon } from '../components/Icon'
 import { LocationControl } from '../components/LocationControl'
+import { TariffControl, type TariffProvider } from '../components/TariffControl'
 
 type DashboardViewProps = {
   dashboard: Dashboard | null
@@ -22,10 +23,13 @@ type DashboardViewProps = {
   busy: boolean
   locationBusy: boolean
   locationError: string | null
+  tariffBusy: boolean
+  tariffError: string | null
   onNavigateToDevices: () => void
   onStrategyChange: (strategy: StrategyType) => void
   onExportThresholdChange: (value: number) => void
   onLocationChange: (city: string) => void
+  onTariffRefresh: (provider: TariffProvider) => void
 }
 
 export function DashboardView({
@@ -38,10 +42,13 @@ export function DashboardView({
   busy,
   locationBusy,
   locationError,
+  tariffBusy,
+  tariffError,
   onNavigateToDevices,
   onStrategyChange,
   onExportThresholdChange,
   onLocationChange,
+  onTariffRefresh,
 }: DashboardViewProps) {
   const latest = dashboard?.latest_log
   const cycleSeconds = latest?.interval_seconds ?? SIMULATION_CYCLE_MINUTES * 60
@@ -172,14 +179,28 @@ export function DashboardView({
               <span><small>Maks. rozładowanie</small>{dashboard ? formatKw(dashboard.battery.max_discharge_rate_kw) : '--'}</span>
             </div>
             {dashboard && (
-              <LocationControl
-                key={dashboard.settings.location_name}
-                currentLocation={dashboard.settings.location_name}
-                disabled={!canManage}
-                busy={locationBusy}
-                error={locationError}
-                onSubmit={onLocationChange}
-              />
+              <>
+                <TariffControl
+                  key={`${dashboard.settings.tariff_provider}-${dashboard.settings.tariff_updated_at ?? 'initial'}`}
+                  provider={dashboard.settings.tariff_provider}
+                  buyPrice={dashboard.settings.grid_buy_price}
+                  sellPrice={dashboard.settings.grid_sell_price}
+                  sellPeriod={dashboard.settings.tariff_sell_period}
+                  updatedAt={dashboard.settings.tariff_updated_at}
+                  disabled={!canManage}
+                  busy={tariffBusy}
+                  error={tariffError}
+                  onRefresh={onTariffRefresh}
+                />
+                <LocationControl
+                  key={dashboard.settings.location_name}
+                  currentLocation={dashboard.settings.location_name}
+                  disabled={!canManage}
+                  busy={locationBusy}
+                  error={locationError}
+                  onSubmit={onLocationChange}
+                />
+              </>
             )}
             {dashboard?.settings.active_strategy === 'maximize_profit' && (
               <ExportThresholdControl

@@ -82,6 +82,7 @@ class EnergyManager:
                     active_strategy=StrategyType.ECO_FRIENDLY,
                     grid_buy_price=0.95,
                     grid_sell_price=0.42,
+                    tariff_provider="PGE",
                     battery_export_threshold_percentage=80.0,
                     location_name="Wroclaw",
                     latitude=51.1078,

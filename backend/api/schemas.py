@@ -1,6 +1,7 @@
 """Pydantic schemas for the SmartHome EMS API layer."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -95,6 +96,9 @@ class SystemSettingsPublic(BaseModel):
     active_strategy: StrategyType
     grid_buy_price: float
     grid_sell_price: float
+    tariff_provider: str
+    tariff_updated_at: datetime | None
+    tariff_sell_period: str | None
     battery_export_threshold_percentage: float
     location_name: str
     latitude: float
@@ -127,6 +131,10 @@ class LocationUpdateRequest(BaseModel):
         if len(city) < 2:
             raise ValueError("City name must contain at least two characters")
         return city
+
+
+class TariffRefreshRequest(BaseModel):
+    provider: Literal["PGE", "TAURON"]
 
 
 class StrategyRequest(BaseModel):

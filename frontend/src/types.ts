@@ -28,6 +28,9 @@ export type Settings = {
   active_strategy: StrategyType
   grid_buy_price: number
   grid_sell_price: number
+  tariff_provider: 'PGE' | 'TAURON'
+  tariff_updated_at: string | null
+  tariff_sell_period: string | null
   battery_export_threshold_percentage: number
   location_name: string
   latitude: number

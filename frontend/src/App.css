@@ -769,6 +769,122 @@ button:disabled {
   background: rgba(255, 255, 255, 0.025);
 }
 
+.tariff-control {
+  display: grid;
+  gap: 12px;
+  margin-top: 9px;
+  border: 1px solid rgba(73, 191, 166, 0.15);
+  border-radius: 11px;
+  padding: 12px;
+  background: rgba(73, 191, 166, 0.035);
+}
+
+.tariff-control-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.tariff-control-heading strong {
+  display: block;
+  color: var(--muted-strong);
+  font-size: 10px;
+}
+
+.tariff-control-heading p,
+.tariff-disclaimer {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.tariff-control-heading > span {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: var(--teal);
+  background: rgba(73, 191, 166, 0.08);
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.tariff-control form {
+  display: grid;
+  gap: 6px;
+}
+
+.tariff-control label {
+  color: var(--muted-strong);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.tariff-control-fields {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(170px, 1fr);
+  gap: 8px;
+}
+
+.tariff-control select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 0 11px;
+  color: var(--text);
+  background: #101813;
+  outline: none;
+}
+
+.tariff-control select:focus {
+  border-color: var(--green);
+}
+
+.tariff-control button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.tariff-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tariff-values span {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 9px;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.tariff-values small {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.tariff-values strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.tariff-disclaimer {
+  margin-top: 0;
+}
+
+.tariff-disclaimer a {
+  color: var(--lime);
+  text-decoration: none;
+}
+
+.tariff-disclaimer a:hover {
+  text-decoration: underline;
+}
+
 .location-control-heading {
   display: flex;
   align-items: center;
@@ -1910,6 +2026,15 @@ button:disabled {
   }
 
   .location-control-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .tariff-control-heading {
+    flex-direction: column;
+  }
+
+  .tariff-control-fields,
+  .tariff-values {
     grid-template-columns: 1fr;
   }
 

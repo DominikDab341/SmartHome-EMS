@@ -18,6 +18,7 @@ from api.schemas import (
     StrategyRequest,
     SystemSettingsPublic,
     SystemSettingsUpdate,
+    TariffRefreshRequest,
 )
 from core.geocoding import (
     GeocodingServiceError,
@@ -25,6 +26,8 @@ from core.geocoding import (
     geocoding_adapter,
 )
 from core.manager import energy_manager
+from core.tariffs import TariffScrapeError, tariff_scraper
+from core.domain import utc_now
 from database.config import settings as app_settings
 from database.database import get_db
 from database.models import Battery, Device, DeviceType, EnergyLog, SystemSettings, User
@@ -252,6 +255,31 @@ async def update_location(
     system_settings.location_name = location.name
     system_settings.latitude = location.latitude
     system_settings.longitude = location.longitude
+    await db.commit()
+    await db.refresh(system_settings)
+    return SystemSettingsPublic.model_validate(system_settings)
+
+
+@router.post("/settings/tariffs/refresh", response_model=SystemSettingsPublic)
+async def refresh_tariffs(
+    body: TariffRefreshRequest,
+    db: AsyncSession = Depends(get_db),
+    current_owner: User = Depends(get_current_owner),
+) -> SystemSettingsPublic:
+    system_settings = await _get_settings(db, house_scope_id(current_owner))
+    try:
+        quote = await tariff_scraper.fetch(body.provider)
+    except TariffScrapeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Nie udało się odczytać aktualnych taryf z oficjalnych źródeł.",
+        ) from exc
+
+    system_settings.grid_buy_price = quote.buy_price_pln_kwh
+    system_settings.grid_sell_price = quote.sell_price_pln_kwh
+    system_settings.tariff_provider = quote.provider
+    system_settings.tariff_updated_at = utc_now()
+    system_settings.tariff_sell_period = quote.sell_period
     await db.commit()
     await db.refresh(system_settings)
     return SystemSettingsPublic.model_validate(system_settings)

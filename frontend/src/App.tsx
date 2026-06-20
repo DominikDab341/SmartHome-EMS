@@ -36,6 +36,7 @@ import { AnalyticsView } from './views/AnalyticsView'
 import { DashboardView } from './views/DashboardView'
 import { DevicesView } from './views/DevicesView'
 import { ResidentsView } from './views/ResidentsView'
+import type { TariffProvider } from './components/TariffControl'
 
 function App() {
   const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY)
@@ -56,6 +57,8 @@ function App() {
   const [settingsBusy, setSettingsBusy] = useState(false)
   const [locationBusy, setLocationBusy] = useState(false)
   const [locationError, setLocationError] = useState<string | null>(null)
+  const [tariffBusy, setTariffBusy] = useState(false)
+  const [tariffError, setTariffError] = useState<string | null>(null)
 
   const [deviceForm, setDeviceForm] = useState<DeviceForm>(emptyDeviceForm)
   const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null)
@@ -136,6 +139,8 @@ function App() {
     setSettingsBusy(false)
     setLocationBusy(false)
     setLocationError(null)
+    setTariffBusy(false)
+    setTariffError(null)
     setActiveView('dashboard')
     setMobileNavigationOpen(false)
   }, [])
@@ -621,6 +626,30 @@ function App() {
     }
   }
 
+  async function refreshTariffs(provider: TariffProvider): Promise<void> {
+    if (!token || !canManage) return
+
+    setTariffBusy(true)
+    setTariffError(null)
+    try {
+      const settings = await request<Settings>(
+        '/api/ems/settings/tariffs/refresh',
+        {
+          method: 'POST',
+          body: JSON.stringify({ provider }),
+        },
+        token,
+      )
+      setDashboard((current) => (current ? { ...current, settings } : current))
+    } catch {
+      setTariffError(
+        'Nie udało się pobrać cen z oficjalnych stron. Poprzednie wartości pozostały bez zmian.',
+      )
+    } finally {
+      setTariffBusy(false)
+    }
+  }
+
   if (!token || (!user && !checkingSession)) {
     return (
       <AuthScreen
@@ -676,10 +705,13 @@ function App() {
             busy={busy || settingsBusy}
             locationBusy={locationBusy}
             locationError={locationError}
+            tariffBusy={tariffBusy}
+            tariffError={tariffError}
             onNavigateToDevices={() => navigateTo('devices')}
             onStrategyChange={(strategy) => void setStrategy(strategy)}
             onExportThresholdChange={(value) => void setBatteryExportThreshold(value)}
             onLocationChange={(city) => void setWeatherLocation(city)}
+            onTariffRefresh={(provider) => void refreshTariffs(provider)}
           />
         )}
 

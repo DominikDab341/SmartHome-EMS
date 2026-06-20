@@ -11,6 +11,7 @@ from core.geocoding import (
     LocationNotFoundError,
 )
 from core.manager import EnergyManager
+from core.tariffs import TariffScrapeError, TariffScraper
 from core.weather import WeatherAdapter
 from database.models import DeviceType, StrategyType
 
@@ -229,3 +230,61 @@ def test_geocoding_rejects_invalid_coordinates() -> None:
                 ]
             }
         )
+
+
+def test_pge_tariff_price_is_extracted_from_official_markup() -> None:
+    page = (
+        "<p>Cena ca&#322;odobowa&nbsp;"
+        "<strong class=\"regular\">0,6189</strong>&nbsp;z&#322;/kWh</p>"
+    )
+
+    assert TariffScraper._extract_pge_buy_price(page) == pytest.approx(0.6189)
+
+
+def test_tauron_net_mwh_price_is_converted_to_gross_kwh() -> None:
+    page = (
+        "<p>Cena energii elektrycznej wyniesie "
+        "497 zł netto za megawatogodzinę.</p>"
+    )
+
+    assert TariffScraper._extract_tauron_buy_price(page) == pytest.approx(0.6175)
+
+
+def test_latest_pse_rcem_is_extracted_with_period() -> None:
+    page = """
+    <table><tbody>
+      <tr><th><strong>2026</strong></th></tr>
+      <tr><td>kwiecień</td></tr>
+      <tr><td>RCEm</td><td>132,92</td><td>11.05.2026</td></tr>
+      <tr><td>skorygowana RCEm*</td><td>-</td></tr>
+      <tr><td>maj</td></tr>
+      <tr><td>RCEm</td><td>191,37</td><td>11.06.2026</td></tr>
+      <tr><td>skorygowana RCEm*</td><td>-</td></tr>
+    </tbody></table>
+    """
+
+    price, period = TariffScraper._extract_latest_rcem(page, 2026)
+
+    assert price == pytest.approx(0.19137)
+    assert period == "maj 2026"
+
+
+def test_corrected_rcem_replaces_original_price_for_latest_period() -> None:
+    page = """
+    <table><tbody>
+      <tr><th><strong>2026</strong></th></tr>
+      <tr><td>maj</td></tr>
+      <tr><td>RCEm</td><td>191,37</td></tr>
+      <tr><td>skorygowana RCEm*</td><td>188,50</td></tr>
+    </tbody></table>
+    """
+
+    price, period = TariffScraper._extract_latest_rcem(page, 2026)
+
+    assert price == pytest.approx(0.1885)
+    assert period == "maj 2026"
+
+
+def test_tariff_scraper_fails_when_price_is_missing() -> None:
+    with pytest.raises(TariffScrapeError):
+        TariffScraper._extract_pge_buy_price("<html></html>")
